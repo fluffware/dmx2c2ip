@@ -1,0 +1,2 @@
+dmx2c2ip acts as a link between DMX and camera settings using C2IP (from Grass Valley).
+The program is a DMX-slave that connects to a camera speaking C2IP. DMX channels can be mapped to variuos camera settings.
