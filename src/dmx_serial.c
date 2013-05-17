@@ -13,7 +13,7 @@
 #endif
 extern int ioctl(int d, int request, ...);
 
-#define DMX_RATE 250000
+#define DMX_RATE 115200
 
 int 
 dmx_serial_open(const char *device, GError **err)

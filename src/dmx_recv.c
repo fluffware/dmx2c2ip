@@ -7,11 +7,16 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#define STATE_NORMAL 0
+#define STATE_ESCAPE 1
+#define STATE_FRAMING 2
+#define STATE_SKIP 3
 
 struct _DMXRecv
 {
   GObject parent_instance;
   int serial_fd;
+  gint source;
 };
 struct _DMXRecvClass
 {
@@ -29,6 +34,10 @@ dispose(GObject *gobj)
   if (recv->serial_fd >= 0) {
     close(recv->serial_fd);
     recv->serial_fd = -1;
+  }
+  if (recv->source) {
+    g_source_remove(recv->source);
+    recv->source = 0;
   }
   G_OBJECT_CLASS(dmx_recv_parent_class)->dispose(gobj);
 }
@@ -51,12 +60,15 @@ static void
 dmx_recv_init (DMXRecv *self)
 {
   self->serial_fd = -1;
+  self->source = 0;
 }
 
 struct DMXSource
 {
   GSource source;
   GPollFD pollfd;
+  uint8_t state;
+  DMXRecv *recv;
 };
 
 
@@ -83,9 +95,21 @@ dispatch(GSource *source, GSourceFunc callback, gpointer user_data)
   ssize_t r = read(dmx_source->pollfd.fd, buffer, sizeof(buffer));
   g_debug("Dispatch");
   for (i = 0; i < r; i++) {
-    fprintf(stderr, " %02x", buffer[i]);
+    uint8_t c = buffer[i];
+    if (dmx_source->state == STATE_NORMAL && c == 0xff) {
+      dmx_source->state = STATE_ESCAPE;
+    } else if (dmx_source->state == STATE_ESCAPE && c == 0x00) {
+      dmx_source->state = STATE_FRAMING;
+    } else if (dmx_source->state == STATE_FRAMING) {
+      if (c == 0x00) {
+	fprintf(stderr,"\n");
+      }
+      dmx_source->state = STATE_NORMAL;
+    } else {
+      dmx_source->state = STATE_NORMAL;
+      fprintf(stderr, " %02x", c);
+    }
   }
-   fprintf(stderr, "\n");
   return TRUE;
 }
 
@@ -112,7 +136,9 @@ dmx_recv_new(const char *device, GError **err)
   g_assert(source != NULL);
   source->pollfd.events = G_IO_IN | G_IO_ERR;
   source->pollfd.fd = recv->serial_fd;
+  source->state = STATE_NORMAL;
+  source->recv = recv;
   g_source_add_poll(&source->source, &((struct DMXSource*)source)->pollfd);
-  g_source_attach(&source->source, NULL);
+  recv->source = g_source_attach(&source->source, NULL);
   return recv;
 }

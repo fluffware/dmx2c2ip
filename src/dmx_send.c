@@ -50,7 +50,7 @@ main(int argc, char *argv[])
 {
   const static uint8_t packet[] = {0,0xda, 0x01, 0x02, 0x03, 0x04,0xde, 0xff, 0x34};
   int fd = open_serial(argv[1]);
-  ioctl(fd, TCSBRK, 0);
+  ioctl(fd, TCSBRKP, 1);
   write(fd, packet, sizeof(packet));
   close(fd);
   return EXIT_SUCCESS;
