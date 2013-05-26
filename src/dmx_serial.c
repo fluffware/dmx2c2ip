@@ -13,7 +13,7 @@
 #endif
 extern int ioctl(int d, int request, ...);
 
-#define DMX_RATE 115200
+#define DMX_RATE 250000
 
 int 
 dmx_serial_open(const char *device, GError **err)
@@ -37,7 +37,7 @@ dmx_serial_open(const char *device, GError **err)
   settings.c_oflag &= ~OPOST;
   settings.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
   settings.c_cflag &= ~(CSIZE | PARENB | CBAUD);
-  settings.c_cflag |= CS8 | BOTHER;
+  settings.c_cflag |= CS8 | BOTHER | CREAD;
   settings.c_ispeed = DMX_RATE;
   settings.c_ospeed = DMX_RATE;
   if (ioctl(fd, TCSETS2, &settings) < 0) {

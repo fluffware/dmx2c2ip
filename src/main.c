@@ -24,7 +24,7 @@ main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
   g_option_context_free(opt_ctxt);
-  recv = dmx_recv_new("/dev/ttyUSB0", &err);
+  recv = dmx_recv_new("/dev/ttyAMA0", &err);
   if (!recv) {
     g_printerr("Failed setup DMX port: %s\n", err->message);
     return EXIT_FAILURE;
