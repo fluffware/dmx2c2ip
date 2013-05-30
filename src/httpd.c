@@ -304,7 +304,37 @@ add_mime_type(struct MHD_Response *resp, const char *filename)
   MHD_add_response_header(resp, "Content-Type", mime);
 }
 
-  static int 
+static int
+file_response(HTTPServer *server,
+	      struct MHD_Connection * connection, const char *url)
+{
+  if (server->http_root && check_filename(url)) {
+    int fd;
+      gchar * filename = g_build_filename(server->http_root, url, NULL);
+      fd = open(filename, O_RDONLY);
+      if (fd < 0) {
+	g_warning("Failed to open file %s: %s", filename, strerror(errno));
+      } else {
+	struct stat status;
+	if (fstat(fd, &status) >= 0) {
+	  struct MHD_Response * resp;
+	  resp = MHD_create_response_from_fd_at_offset(status.st_size, fd, 0);
+	  add_mime_type(resp,filename); 
+	  MHD_queue_response(connection, MHD_HTTP_OK, resp);
+	  MHD_destroy_response(resp);
+	  g_free(filename);
+	  return MHD_YES;
+	} else {
+	  close(fd);
+	}
+      }
+      g_free(filename);
+  }
+  error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+  return MHD_YES;
+}
+
+static int 
 request_handler(void *user_data, struct MHD_Connection * connection,
 		const char *url, const char *method,
 		const char *version, const char *upload_data,
@@ -335,33 +365,9 @@ request_handler(void *user_data, struct MHD_Connection * connection,
   }
   clear_header_data(&header);
 
-  g_debug("url: %s",url);
   if (*url == '/') {
     url++;
-    if (server->http_root && check_filename(url)) {
-      int fd;
-      gchar * filename = g_build_filename(server->http_root, url, NULL);
-      g_debug("Filename: %s", filename);
-      fd = open(filename, O_RDONLY);
-      if (fd < 0) {
-	g_warning("Failed to open file %s: %s", filename, strerror(errno));
-      } else {
-	struct stat status;
-	if (fstat(fd, &status) >= 0) {
-	  struct MHD_Response * resp;
-	  g_debug("Sizeof(off_t): %d", sizeof(off_t));
-	  resp = MHD_create_response_from_fd_at_offset(status.st_size, fd, 0);
-	  add_mime_type(resp,filename); 
-	  MHD_queue_response(connection, MHD_HTTP_OK, resp);
-	  MHD_destroy_response(resp);
-	  g_free(filename);
-	  return MHD_YES;
-	} else {
-	  close(fd);
-	}
-      }
-      g_free(filename);
-    }
+    return file_response(server, connection, url);
   }
   error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   return MHD_YES;
