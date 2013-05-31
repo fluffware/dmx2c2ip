@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <json-glib/json-glib.h>
 
 GQuark
 http_server_error_quark()
@@ -39,6 +40,7 @@ enum
   PROP_USER,
   PROP_PASSWORD,
   PROP_HTTP_ROOT,
+  PROP_VALUE_ROOT,
   N_PROPERTIES
 };
 
@@ -50,6 +52,9 @@ struct _HTTPServer
   gchar *password;
   guint port;
   gchar *http_root;
+  JsonNode *value_root;
+  JsonGenerator *json_generator;
+  JsonParser* json_parser;
 };
 
 struct _HTTPServerClass
@@ -70,6 +75,12 @@ dispose(GObject *gobj)
   if (server->daemon) {
     MHD_stop_daemon(server->daemon);
     server->daemon = NULL;
+  }
+  g_clear_object(&server->json_generator);
+  g_clear_object(&server->json_parser);
+  if (server->value_root) {
+    json_node_free(server->value_root);
+    server->value_root = NULL;
   }
   g_free(server->user);
   g_free(server->password);
@@ -105,6 +116,10 @@ set_property (GObject *object, guint property_id,
       g_free(server->http_root);
       server->http_root = g_value_dup_string(value);
       break;
+    case PROP_VALUE_ROOT:
+      if (server->value_root) json_node_free(server->value_root);
+      server->value_root = g_value_get_pointer (value);
+      break;
     default:
        /* We don't have any other property... */
        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -129,6 +144,9 @@ get_property (GObject *object, guint property_id,
     break;
   case PROP_HTTP_ROOT:
     g_value_set_string(value, server->http_root);
+    break;
+  case PROP_VALUE_ROOT:
+    g_value_set_pointer(value, server->value_root);
     break;
   default:
     /* We don't have any other property... */
@@ -163,6 +181,9 @@ http_server_class_init (HTTPServerClass *klass)
   properties[PROP_HTTP_ROOT]
     =  g_param_spec_string("http-root", "root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+  properties[PROP_VALUE_ROOT]
+    =  g_param_spec_pointer("value-root", "values", "Root node of JSON tree",
+			   G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
 }
 static void
@@ -173,6 +194,9 @@ http_server_init(HTTPServer *server)
   server->password = NULL;
   server->port = 8080;
   server->http_root = NULL;
+  server->value_root = NULL;
+  server->json_generator = NULL;
+  server->json_parser = NULL;
 }
 
 static int
@@ -188,7 +212,7 @@ string_content_handler_free(void *user_data)
   g_free(user_data);
 }
 
-static void
+static int
 error_response(struct MHD_Connection * connection,
 		      int response, const char *response_msg,
 		      const char *detail)
@@ -211,6 +235,7 @@ error_response(struct MHD_Connection * connection,
 			   "text/html; UTF-8");
   MHD_queue_response(connection, response, resp);
   MHD_destroy_response(resp);
+  return MHD_YES;
 }
 
 typedef struct HeaderData
@@ -284,7 +309,7 @@ add_mime_type(struct MHD_Response *resp, const char *filename)
   const char *mime;
   char *ext = index(filename, '.');
   ext++;
-  if (strcmp("html",ext) == 0 || strcmp("htm",ext)) {
+  if (strcmp("html",ext) == 0 || strcmp("htm",ext) == 0) {
     mime = "text/html; charset=UTF-8";
   } else  if (strcmp("txt",ext) == 0) {
     mime = "text/plain; charset=UTF-8";
@@ -300,6 +325,8 @@ add_mime_type(struct MHD_Response *resp, const char *filename)
     mime = "text/xml";
   } else  if (strcmp("xhtml",ext) == 0) {
     mime = "application/xhtml+xml";
+  } else  if (strcmp("ico",ext) == 0) {
+    mime = "image/x-icon";
   } 
   MHD_add_response_header(resp, "Content-Type", mime);
 }
@@ -332,6 +359,75 @@ file_response(HTTPServer *server,
   }
   error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   return MHD_YES;
+}
+
+JsonNode *
+find_node(JsonNode *node, const gchar *path)
+{
+  while(node && *path) {
+    if (*path == '/') return NULL;
+    switch(JSON_NODE_TYPE(node)) {
+    case JSON_NODE_OBJECT:
+      {
+	gchar *n;
+	const gchar *end = path;
+	while(*end!='/' && *end!='\0') end++;
+	if (end == path) return NULL;
+	n = g_strndup(path, end - path);
+	node = json_object_get_member(json_node_get_object(node), n);
+	g_free(n);
+	path = end;
+      }
+      break;
+    case JSON_NODE_ARRAY:
+      {
+	JsonArray *a;
+	guint index = 0;
+	while(g_ascii_isdigit(*path)) {
+	  index = index * 10 + g_ascii_digit_value(*path++);
+	}
+	if (*path != '/' && *path != '\0') return NULL;
+	a = json_node_get_array(node);
+	if (index >= json_array_get_length(a)) return NULL;
+	node = json_array_get_element(a, index);
+      }
+      break;
+    default:
+      return NULL;
+    }
+    if (*path == '/') path++;
+  }
+  return node;
+}
+
+static int
+values_response(HTTPServer *server,
+	      struct MHD_Connection * connection, const char *url)
+{
+  JsonNode *root;
+  gchar *resp_str;
+  gsize resp_len;
+  struct MHD_Response * resp;
+  if (!server->value_root) {
+    g_warning("No value root");
+    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+  }
+  root = find_node(server->value_root, url);
+  if (!root)
+    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+  if (!server->json_generator) {
+    server->json_generator = json_generator_new();
+  }
+  json_generator_set_root(server->json_generator, root);
+  resp_str = json_generator_to_data (server->json_generator, &resp_len);
+
+  resp = MHD_create_response_from_callback(strlen(resp_str), 1024, string_content_handler, resp_str, string_content_handler_free);
+  MHD_add_response_header(resp, "Content-Type",
+			   "application/json");
+  MHD_queue_response(connection, MHD_HTTP_OK, resp);
+  MHD_destroy_response(resp);
+  
+  return MHD_YES; 
 }
 
 static int 
@@ -367,7 +463,13 @@ request_handler(void *user_data, struct MHD_Connection * connection,
 
   if (*url == '/') {
     url++;
-    return file_response(server, connection, url);
+    if (strncmp("values", url, 6) == 0) {
+      url+=6;
+      if (*url == '/') url++;
+      return values_response(server, connection, url);
+    } else {
+      return file_response(server, connection, url);
+    }
   }
   error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   return MHD_YES;

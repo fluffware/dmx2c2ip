@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <glib-unix.h>
 #include "httpd.h"
+#include <json-glib/json-glib.h>
+#include <json-glib/json-glib.h>
 
 static gboolean
 sigint_handler(gpointer user_data)
@@ -66,6 +68,7 @@ configure_http_server(AppContext *app)
 {
   GError *err = NULL;
   guint port;
+  JsonBuilder *builder;
   port = g_key_file_get_integer(app_ctxt.config_file, "HTTP", "Port", &err);
   if (!err) {
     g_object_set(app->http_server, "http-port", port, NULL);
@@ -79,6 +82,19 @@ configure_http_server(AppContext *app)
   configure_string_property(app->http_server, "http-root",
 			    app_ctxt.config_file, "HTTP", "Root");
 
+  builder = json_builder_new();
+  json_builder_begin_object(builder);
+  json_builder_set_member_name(builder, "foo");
+  json_builder_add_int_value(builder, 78);
+  json_builder_set_member_name(builder, "bar");
+  json_builder_begin_array(builder);
+  json_builder_add_double_value(builder, 3.1415);
+  json_builder_add_double_value(builder, -1.41);
+  json_builder_end_array(builder);
+  json_builder_end_object(builder);
+  g_object_set(app->http_server,
+	       "value-root", json_builder_get_root(builder), NULL);
+  g_object_unref(builder);
 }
 
 

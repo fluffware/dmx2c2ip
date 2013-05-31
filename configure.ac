@@ -16,7 +16,7 @@ AC_SUBST(MICROHTTPD_LIBS,$MICROHTTPD_LIBS)
 # Check for JSON-GLib
 AC_MSG_CHECKING([for JSON-GLib]) 
 if pkg-config json-glib-1.0 --exists; then
-JSONGLIB_LIBS=`pkg-config json-glib-1.0 --cflags`
+JSONGLIB_CFLAGS=`pkg-config json-glib-1.0 --cflags`
 AC_SUBST(JSONGLIB_CFLAGS)
 JSONGLIB_LIBS=`pkg-config json-glib-1.0 --libs`
 AC_SUBST(JSONGLIB_LIBS)
