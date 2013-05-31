@@ -120,6 +120,11 @@ main(int argc, char *argv[])
     return EXIT_FAILURE;
   }
   g_option_context_free(opt_ctxt);
+  if (!app_ctxt.config_filename) {
+    g_printerr("No configuration file\n");
+    app_cleanup(&app_ctxt);
+    return EXIT_FAILURE;
+  }
   if (app_ctxt.config_filename) {
     app_ctxt.config_file = g_key_file_new();
     if (!g_key_file_load_from_file(app_ctxt.config_file,
