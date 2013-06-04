@@ -26,7 +26,7 @@ function requestError(req,status,error)
 
 function sendValues(url, data)
 {
-    jQuery.post(url, JSON.stringify(data), handleValueReply,"json").error(postError);
+    jQuery.ajax({type:"POST", url:url, dataType:"json", mimeType:"application/json", data:JSON.stringify(data), success:handleValueReply, error:postError});
 }
 
 function postError(req,status,error)

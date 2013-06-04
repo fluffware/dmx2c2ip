@@ -241,12 +241,14 @@ error_response(struct MHD_Connection * connection,
 typedef struct HeaderData
 {
   char *auth;
+  char *content_type;
 } HeaderData;
 
 static inline void
 init_header_data(HeaderData *hd)
 {
   hd->auth = NULL;
+  hd->content_type = NULL;
 }
 
 static void
@@ -256,6 +258,10 @@ clear_header_data(HeaderData *hd)
     g_free(hd->auth);
     hd->auth = NULL;
   }
+  if (hd->content_type) {
+    g_free(hd->content_type);
+    hd->content_type = NULL;
+  }
 }
 
 static int
@@ -263,7 +269,9 @@ collect_request_headers (void *user_data, enum MHD_ValueKind kind,
 			 const char *key, const char *value)
 {
   HeaderData *hd = user_data;
-  if (strcmp(key, "Authorization")==0) {
+  if (strcmp(key, "Content-Type")==0) {
+    hd->content_type = g_strdup(value);
+  } else if (strcmp(key, "Authorization")==0) {
     hd->auth = g_strdup(value);
   }
   return MHD_YES;
@@ -401,26 +409,21 @@ find_node(JsonNode *node, const gchar *path)
 }
 
 static int
-values_response(HTTPServer *server,
-	      struct MHD_Connection * connection, const char *url)
+json_response(HTTPServer *server, struct MHD_Connection * connection,
+	      JsonNode *node)
 {
-  JsonNode *root;
   gchar *resp_str;
   gsize resp_len;
   struct MHD_Response * resp;
-  if (!server->value_root) {
-    g_warning("No value root");
-    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+  if (node) {
+    if (!server->json_generator) {
+      server->json_generator = json_generator_new();
+    }
+    json_generator_set_root(server->json_generator, node);
+    resp_str = json_generator_to_data (server->json_generator, &resp_len);
+  } else {
+    resp_str = g_strdup("null");
   }
-  root = find_node(server->value_root, url);
-  if (!root)
-    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
-  if (!server->json_generator) {
-    server->json_generator = json_generator_new();
-  }
-  json_generator_set_root(server->json_generator, root);
-  resp_str = json_generator_to_data (server->json_generator, &resp_len);
-
   resp = MHD_create_response_from_callback(strlen(resp_str), 1024, string_content_handler, resp_str, string_content_handler_free);
   MHD_add_response_header(resp, "Content-Type",
 			   "application/json");
@@ -430,19 +433,75 @@ values_response(HTTPServer *server,
   return MHD_YES; 
 }
 
+static int
+values_response(HTTPServer *server,
+	      struct MHD_Connection * connection, const char *url)
+{
+  JsonNode *root;
+  if (!server->value_root) {
+    g_warning("No value root");
+    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+  }
+  root = find_node(server->value_root, url);
+  if (!root)
+    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+
+  return json_response(server, connection, root);
+}
+
+static int
+handle_GET_request(HTTPServer *server, struct MHD_Connection * connection,
+		   const char *url)
+{
+
+  if (*url == '/') {
+    url++;
+    if (strncmp("values", url, 6) == 0) {
+      url+=6;
+      if (*url == '/') url++;
+      return values_response(server, connection, url);
+    } else {
+      return file_response(server, connection, url);
+    }
+  }
+}
+
+static int
+handle_POST_request(HTTPServer *server, HeaderData *header,
+		    struct MHD_Connection *connection, const char *url,
+		    const char *upload_data, size_t *upload_data_size)
+{
+  if (!header->content_type || strcmp(header->content_type, "application/json") != 0) {
+    gchar detail[100];
+    g_snprintf(detail, sizeof(detail), "Only application/json supported for POST (got %s)", header->content_type ? header->content_type : "none");
+    g_debug(detail);
+    return error_response(connection, MHD_HTTP_UNSUPPORTED_MEDIA_TYPE,
+			  "Unsupported Media TYpe",
+			  detail);
+  }
+  if (upload_data) {
+    return error_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Server Error", "Request too long");
+  }
+  if (*url == '/') {
+    url++;
+    if (strncmp("values", url, 6) == 0) {
+      url+=6;
+      if (*url == '/') url++;
+      return json_response(server, connection, NULL);
+    }
+  }
+  return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
+}
 static int 
 request_handler(void *user_data, struct MHD_Connection * connection,
 		const char *url, const char *method,
 		const char *version, const char *upload_data,
 		size_t *upload_data_size, void **con_cls)
 {
+  int res = MHD_YES;
   HTTPServer *server = user_data;
   HeaderData header;
   init_header_data(&header);
-  if (strcmp(method, "GET") != 0) { 
-    error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method Not Allowed", NULL);
-    return MHD_YES;
-  }
   MHD_get_connection_values(connection, MHD_HEADER_KIND,
 			    collect_request_headers, &header);
   if (server->user && (!header.auth || !check_auth(server, header.auth))) {
@@ -459,20 +518,15 @@ request_handler(void *user_data, struct MHD_Connection * connection,
     clear_header_data(&header);
     return MHD_YES;
   }
-  clear_header_data(&header);
-
-  if (*url == '/') {
-    url++;
-    if (strncmp("values", url, 6) == 0) {
-      url+=6;
-      if (*url == '/') url++;
-      return values_response(server, connection, url);
-    } else {
-      return file_response(server, connection, url);
-    }
+  if (strcmp(method, "GET") == 0) { 
+    res = handle_GET_request(server, connection, url);
+  } else if (strcmp(method, "POST") == 0) { 
+    res = handle_POST_request(server, &header, connection, url, upload_data, upload_data_size);
+  } else {
+    res = error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method Not Allowed", NULL);
   }
-  error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
-  return MHD_YES;
+  clear_header_data(&header);
+  return res;
 }
 
 

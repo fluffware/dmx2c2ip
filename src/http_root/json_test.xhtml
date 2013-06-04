@@ -3,22 +3,18 @@
  'http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd'>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
   <head>
-    <title>
-      SVG animation
-    </title>
+    <title>JSON test</title>
     <script type="application/javascript" src="json_util.js">
     </script>
     <script type="application/javascript" src="jquery_min.js">
     </script>
   </head>
   <body>
-    <h1>
-      SVG animation
-    </h1>
+    <h1>JSON test</h1>
     <form action="#">
       <p>
 	<button type="button" onclick="requestValues('values')">Get</button>
-	<button type="button" onclick="sendValues('valuaes',{foo:8})">Send</button>
+	<button type="button" onclick="sendValues('values',{foo:8})">Send</button>
 	<button type="button" onclick="$('p#result').text('Foo')" >Foo</button>
       </p>
     </form>
