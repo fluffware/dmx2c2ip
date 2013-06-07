@@ -61,6 +61,7 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   } else {
     g_clear_error(&err);
   }
+  g_free(str);
 }
 
 static void
@@ -109,7 +110,10 @@ main(int argc, char *argv[])
 {
   GError *err = NULL;
   GOptionContext *opt_ctxt;
-  GMainLoop *loop;  
+  GMainLoop *loop;
+#ifdef MEMPROFILE
+  g_mem_set_vtable (glib_mem_profiler_table);
+#endif
   app_init(&app_ctxt);
   g_type_init();
   opt_ctxt = g_option_context_new (" - map DMX to C2IP");
@@ -169,5 +173,8 @@ main(int argc, char *argv[])
   g_main_loop_unref(loop);
   g_debug("Exiting");
   app_cleanup(&app_ctxt);
+#ifdef MEMPROFILE
+  g_mem_profile ();
+#endif
   return EXIT_SUCCESS;
 }

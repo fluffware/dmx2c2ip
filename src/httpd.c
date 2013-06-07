@@ -26,6 +26,8 @@ http_server_error_quark()
   return error_quark;
 }
 
+static GQuark modification_quark = 0;
+
 enum {
   DUMMY_SIG,
   LAST_SIGNAL
@@ -40,7 +42,6 @@ enum
   PROP_USER,
   PROP_PASSWORD,
   PROP_HTTP_ROOT,
-  PROP_VALUE_ROOT,
   N_PROPERTIES
 };
 
@@ -52,6 +53,7 @@ struct _HTTPServer
   gchar *password;
   guint port;
   gchar *http_root;
+  GMutex http_mutex;
   JsonNode *value_root;
   JsonGenerator *json_generator;
   JsonParser* json_parser;
@@ -76,12 +78,14 @@ dispose(GObject *gobj)
     MHD_stop_daemon(server->daemon);
     server->daemon = NULL;
   }
+  g_mutex_lock(&server->http_mutex);
   g_clear_object(&server->json_generator);
   g_clear_object(&server->json_parser);
   if (server->value_root) {
     json_node_free(server->value_root);
     server->value_root = NULL;
   }
+  g_mutex_unlock(&server->http_mutex);
   g_free(server->user);
   g_free(server->password);
   g_free(server->http_root);
@@ -91,6 +95,8 @@ dispose(GObject *gobj)
 static void
 finalize(GObject *gobj)
 {
+  HTTPServer *server = HTTP_SERVER(gobj);
+  g_mutex_clear(&server->http_mutex);
   G_OBJECT_CLASS(http_server_parent_class)->finalize(gobj);
 }
 
@@ -116,10 +122,6 @@ set_property (GObject *object, guint property_id,
       g_free(server->http_root);
       server->http_root = g_value_dup_string(value);
       break;
-    case PROP_VALUE_ROOT:
-      if (server->value_root) json_node_free(server->value_root);
-      server->value_root = g_value_get_pointer (value);
-      break;
     default:
        /* We don't have any other property... */
        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -144,9 +146,6 @@ get_property (GObject *object, guint property_id,
     break;
   case PROP_HTTP_ROOT:
     g_value_set_string(value, server->http_root);
-    break;
-  case PROP_VALUE_ROOT:
-    g_value_set_pointer(value, server->value_root);
     break;
   default:
     /* We don't have any other property... */
@@ -181,11 +180,13 @@ http_server_class_init (HTTPServerClass *klass)
   properties[PROP_HTTP_ROOT]
     =  g_param_spec_string("http-root", "root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
-  properties[PROP_VALUE_ROOT]
-    =  g_param_spec_pointer("value-root", "values", "Root node of JSON tree",
-			   G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
+  if (!modification_quark) {
+    modification_quark =
+      g_quark_from_static_string ("HTTPServer-modification-stamp");
+  }
 }
+
 static void
 http_server_init(HTTPServer *server)
 {
@@ -197,6 +198,7 @@ http_server_init(HTTPServer *server)
   server->value_root = NULL;
   server->json_generator = NULL;
   server->json_parser = NULL;
+  g_mutex_init(&server->http_mutex);
 }
 
 static int
@@ -238,19 +240,8 @@ error_response(struct MHD_Connection * connection,
   return MHD_YES;
 }
 
-typedef struct HeaderData
-{
-  char *auth;
-  char *content_type;
-} HeaderData;
 
-static inline void
-init_header_data(HeaderData *hd)
-{
-  hd->auth = NULL;
-  hd->content_type = NULL;
-}
-
+#if 0
 static void
 clear_header_data(HeaderData *hd)
 {
@@ -263,37 +254,37 @@ clear_header_data(HeaderData *hd)
     hd->content_type = NULL;
   }
 }
+#endif
 
-static int
-collect_request_headers (void *user_data, enum MHD_ValueKind kind,
-			 const char *key, const char *value)
+typedef struct _ConnectionContext ConnectionContext;
+
+struct _ConnectionContext
 {
-  HeaderData *hd = user_data;
-  if (strcmp(key, "Content-Type")==0) {
-    hd->content_type = g_strdup(value);
-  } else if (strcmp(key, "Authorization")==0) {
-    hd->auth = g_strdup(value);
-  }
-  return MHD_YES;
-}
+  /* Set to NULL if this is a new request */
+  int (*request_handler)(HTTPServer *server, ConnectionContext *cc,
+			 struct MHD_Connection * connection,
+			 const char *url, const char *method,
+			 const char *version, const char *upload_data,
+			 size_t *upload_data_size);
+  gchar *content_type;
+  GString *post_content;
+};
 
 
 static gboolean
-check_auth(HTTPServer *server, char *auth)
+check_auth(HTTPServer *server, struct MHD_Connection *connection)
 {
-  gchar *pass;
-  gsize cred_len;
-  while (isspace(*auth)) auth++;
-  if (strncmp("Basic", auth,5) != 0) return FALSE;
-  auth+=5;
-  while (isspace(*auth)) auth++;
-  g_base64_decode_inplace(auth, &cred_len);
-  auth[cred_len] = '\0';
-  pass = auth;
-  while (*pass != ':' && *pass != '\0') pass++;
-  *pass++ = '\0';
-  return strcmp(auth, server->user) == 0 && strcmp(pass,server->password) == 0;
+  gboolean  res;
+  char *user;
+  char *pass = NULL;
+  if (!server->user || !server->password) return TRUE;
+  user = MHD_basic_auth_get_username_password (connection, &pass);
+  res = user && pass && strcmp(user, server->user) == 0 && strcmp(pass,server->password) == 0;
+  if (user) free(user);
+  if (pass) free(pass);
+  return res;
 }
+
 static gboolean
 check_filename(const char *url)
 {
@@ -408,6 +399,135 @@ find_node(JsonNode *node, const gchar *path)
   return node;
 }
 
+static JsonNode *
+create_parent_nodes(const char *path, JsonNode *new_node)
+{
+  JsonNode *node;
+  JsonNode *child;
+  const gchar *end = path;
+  gboolean numeric = TRUE;
+  if (*path == '/') path++;
+  if (*path == '\0') return new_node;
+  while(*end!='/' && *end!='\0') {
+    if (!g_ascii_isdigit(*end)) numeric = FALSE;
+    end++;
+  }
+  if (end == path) return NULL;
+  child = create_parent_nodes(end, new_node);
+  if (!child) {
+    return NULL;
+  }
+  if (numeric) {
+    gint index = atoi(path);
+    JsonArray *array;
+    node = json_node_new(JSON_NODE_ARRAY);
+    if (!node) {
+      json_node_free(child);
+      return NULL;
+    }
+    array = json_node_get_array(node);
+    while(index-- > 0) {
+      json_array_add_null_element(array);
+    }
+    json_array_add_element(array, child);
+  } else {
+    gchar *n;
+    JsonObject *obj;
+    node = json_node_new(JSON_NODE_OBJECT);
+    if (!node) {
+      json_node_free(child);
+      return NULL;
+    }
+    obj = json_node_get_object(node);
+    n = g_strndup(path, end - path);
+    json_object_set_member(obj, n, child);
+    g_free(n);
+  }
+}
+#if 0
+static gboolean
+insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
+{
+  if (*path == '/') path++;
+  while(*path != '\0') {
+    
+    if (json_node_is_null(node)) {
+      gboolean numeric = TRUE;
+      guint index = 0;
+      const gchar *end;
+      while(*end!='/' && *end!='\0') {
+	if (!g_ascii_isdigit(*end)) numeric = FALSE;
+	else {
+	  index = index * 10 + g_ascii_digit_value(*path++);
+	}
+	end++;
+      }
+      if (end == path) return FALSE;
+      if (numeric) {
+	JsonArray *a = json_array_new();
+	json_node_init_array (node, a);
+      } else {
+	JsonObject *o = json_object_new();
+	json_node_init_object(node, o);
+	}
+    }
+    switch(JSON_NODE_TYPE(node)) {
+    case JSON_NODE_OBJECT:
+      {
+	JsonNode *child;
+	gchar *n;
+	const gchar *end = path;
+	while(*end!='/' && *end!='\0') end++;
+	if (end == path) return FALSE;
+	n = g_strndup(path, end - path);
+	child = json_object_get_member(json_node_get_object(node), n);
+	if (!child) {
+	  child = json_node_new(JSON_NODE_NULL);
+	  if (!child) {
+	    g_free(n);
+	    return FALSE;
+	  }
+	  json_object_set_member(json_node_get_object(node), n, child);
+	}
+	g_free(n);
+	node = child;
+	path = end;
+	if (*path == '/') path++;
+      }
+      break;
+    case JSON_NODE_ARRAY:
+      {
+	JsonArray *a;
+	guint index = 0;
+	while(g_ascii_isdigit(*path)) {
+	  index = index * 10 + g_ascii_digit_value(*path++);
+	}
+	if (*path == '/') {
+	  path++;
+	} else {
+	  if (*path != '\0') return FALSE;
+	}
+	a = json_node_get_array(node);
+	/* Extend array if necessary */
+	if (index >= json_array_get_length(a)) {
+	  while (index >= json_array_get_length(a)) {
+	    json_array_add_null_element(a);
+	  }
+	}
+	node = json_array_get_element(a, index);
+      }
+      break;
+    case JSON_NODE_VALUE:
+      return FALSE;
+    case JSON_NODE_NULL:
+      /* Shouldn't happen */
+      return FALSE;
+    }
+  }
+  return FALSE;
+}
+#endif
+
 static int
 json_response(HTTPServer *server, struct MHD_Connection * connection,
 	      JsonNode *node)
@@ -437,23 +557,30 @@ static int
 values_response(HTTPServer *server,
 	      struct MHD_Connection * connection, const char *url)
 {
+  int ret;
   JsonNode *root;
   if (!server->value_root) {
     g_warning("No value root");
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
+  g_mutex_lock(&server->http_mutex);
   root = find_node(server->value_root, url);
-  if (!root)
+  if (!root) {
+    g_mutex_unlock(&server->http_mutex);
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
-
-  return json_response(server, connection, root);
+  }
+  ret = json_response(server, connection, root);
+  g_mutex_unlock(&server->http_mutex);
+  return ret; 
 }
 
 static int
-handle_GET_request(HTTPServer *server, struct MHD_Connection * connection,
-		   const char *url)
+handle_GET_request(HTTPServer *server, ConnectionContext *cc,
+			 struct MHD_Connection * connection,
+			 const char *url, const char *method,
+			 const char *version, const char *upload_data,
+			 size_t *upload_data_size)
 {
-
   if (*url == '/') {
     url++;
     if (strncmp("values", url, 6) == 0) {
@@ -464,34 +591,322 @@ handle_GET_request(HTTPServer *server, struct MHD_Connection * connection,
       return file_response(server, connection, url);
     }
   }
+  return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
 }
 
-static int
-handle_POST_request(HTTPServer *server, HeaderData *header,
-		    struct MHD_Connection *connection, const char *url,
-		    const char *upload_data, size_t *upload_data_size)
+struct MatchObjectData
 {
-  if (!header->content_type || strcmp(header->content_type, "application/json") != 0) {
+  gboolean match;
+  JsonObject *object;
+};
+
+static gboolean
+match_node(JsonNode *src, JsonNode *dest);
+
+static void
+match_object(JsonObject *src, const gchar *name, JsonNode *src_member, gpointer data)
+{
+  struct MatchObjectData *mo = data;
+  JsonNode *dest_member = json_object_get_member(mo->object, name);
+  if (dest_member) {
+    if (!match_node(src_member, dest_member)) mo->match = FALSE;
+  } else {
+    mo->match = FALSE;
+  }
+}
+
+struct MatchArrayData
+{
+  gboolean match;
+  JsonArray *array;
+};
+
+static void
+match_array(JsonArray *src,guint index, JsonNode *element_node,
+	    gpointer data)
+{
+  struct MatchArrayData *ma = data;
+  JsonNode *dest_element = json_array_get_element(ma->array, index);
+  if (dest_element) {
+    if (!match_node(element_node, dest_element)) ma->match = FALSE;
+  } else {
+    ma->match = FALSE;
+  }
+}
+
+/* Make sure all nodes in src exists in dest */
+static gboolean
+match_node(JsonNode *src, JsonNode *dest)
+{
+  if (JSON_NODE_TYPE(src) != JSON_NODE_TYPE(dest)) {
+    return FALSE;
+  }
+  switch(JSON_NODE_TYPE(src)) {
+  case JSON_NODE_VALUE:
+    if (!g_value_type_transformable (json_node_get_value_type(src),
+				     json_node_get_value_type(dest)))
+      return FALSE;
+    break;
+  case JSON_NODE_NULL:
+    break;
+  case JSON_NODE_OBJECT:
+    {
+      struct MatchObjectData mo;
+      JsonObject *src_obj = json_node_get_object(src);
+      mo.match = TRUE;
+      mo.object = json_node_get_object(dest);
+      json_object_foreach_member(src_obj, match_object, &mo);
+      return mo.match;
+    }
+  case JSON_NODE_ARRAY:
+    {
+      struct MatchArrayData ma;
+      JsonArray *src_array = json_node_get_array(src);
+      ma.match = TRUE;
+      ma.array = json_node_get_array(dest);
+      if (json_array_get_length(src_array) >json_array_get_length(ma.array))
+	return FALSE;
+      json_array_foreach_element(src_array, match_array, &ma);
+      return ma.match;
+    }
+  }
+  return TRUE;
+}
+
+
+static void
+copy_node(JsonNode *src, JsonNode *dest);
+
+static void
+copy_object(JsonObject *src, const gchar *name, JsonNode *src_member, gpointer data)
+{
+  JsonObject *dest_obj = data;
+  JsonNode *dest_member = json_object_get_member(dest_obj, name);
+  if (dest_member) {
+    copy_node(src_member, dest_member);
+  }
+}
+
+
+static void
+copy_array(JsonArray *src,guint index, JsonNode *element_node,
+	    gpointer data)
+{
+  JsonArray *dest_array = data;
+  JsonNode *dest_element = json_array_get_element(dest_array, index);
+  if (dest_element) {
+    copy_node(element_node, dest_element);
+  }
+}
+
+static void
+copy_node(JsonNode *src, JsonNode *dest)
+{
+  switch(JSON_NODE_TYPE(src)) {
+  case JSON_NODE_VALUE:
+    {
+      GValue v = G_VALUE_INIT;
+      json_node_get_value (src, &v);
+      json_node_set_value (dest, &v);
+    }
+    break;
+  case JSON_NODE_NULL:
+    break;
+  case JSON_NODE_OBJECT:
+    {
+      JsonObject *src_obj = json_node_get_object(src);
+      JsonObject *dest_obj = json_node_get_object(dest);
+      json_object_foreach_member(src_obj, copy_object, dest_obj);
+    }
+    break;
+  case JSON_NODE_ARRAY:
+    {
+      JsonArray *src_array = json_node_get_array(src);
+      JsonArray *dest_array = json_node_get_array(dest);
+      json_array_foreach_element(src_array, copy_array, dest_array);
+    }
+    break;
+  }
+}
+
+/* Modification time stamps */
+
+static gpointer current_modification_stamp = GSIZE_TO_POINTER(1);
+
+static void
+modify_node(JsonNode *node)
+{
+  gssize stamp = g_atomic_pointer_add(&current_modification_stamp, (gssize)1);
+  
+  g_dataset_id_set_data(node, modification_quark, GSIZE_TO_POINTER(stamp));
+}
+
+static void
+init_node_tree_modification_stamps(JsonNode *node);
+
+static void init_node_tree_modification_object(JsonObject *obj, const gchar *member_name, JsonNode *member_node, gpointer data)
+{
+  init_node_tree_modification_stamps(member_node);
+}
+
+static void
+init_node_tree_modification_array(JsonArray *node,
+				  guint index, JsonNode *element_node,
+				  gpointer data)
+{
+  init_node_tree_modification_stamps(element_node);
+}
+
+static void
+init_node_tree_modification_stamps(JsonNode *node)
+{
+  
+  switch(JSON_NODE_TYPE(node)) {
+  case JSON_NODE_VALUE:
+    modify_node(node);
+    break;
+  case JSON_NODE_NULL:
+    modify_node(node);
+    break;
+  case JSON_NODE_OBJECT:
+    {
+      JsonObject *obj = json_node_get_object(node);
+      json_object_foreach_member(obj, init_node_tree_modification_object, NULL);
+    }
+    break;
+  case JSON_NODE_ARRAY:
+    {
+      JsonArray *array = json_node_get_array(node);
+      json_array_foreach_element(array, init_node_tree_modification_array,NULL);
+    }
+    break;
+  }
+}
+
+static void
+clear_node_modification(JsonNode *node) {
+  g_dataset_id_remove_data(node, modification_quark);
+}
+
+static void
+clear_node_tree_modification_stamps(JsonNode *node);
+
+static void clear_node_tree_modification_object(JsonObject *obj, const gchar *member_name, JsonNode *member_node, gpointer data)
+{
+  clear_node_tree_modification_stamps(member_node);
+}
+
+static void
+clear_node_tree_modification_array(JsonArray *node,
+				  guint index, JsonNode *element_node,
+				  gpointer data)
+{
+  clear_node_tree_modification_stamps(element_node);
+}
+
+static void
+clear_node_tree_modification_stamps(JsonNode *node)
+{
+  
+  switch(JSON_NODE_TYPE(node)) {
+  case JSON_NODE_VALUE:
+    clear_node_modification(node);
+    break;
+  case JSON_NODE_NULL:
+    clear_node_modification(node);
+    break;
+  case JSON_NODE_OBJECT:
+    {
+      JsonObject *obj = json_node_get_object(node);
+      json_object_foreach_member(obj, clear_node_tree_modification_object, NULL);
+    }
+    break;
+  case JSON_NODE_ARRAY:
+    {
+      JsonArray *array = json_node_get_array(node);
+      json_array_foreach_element(array, clear_node_tree_modification_array,NULL);
+    }
+    break;
+  }
+}
+
+
+static int
+handle_POST_request(HTTPServer *server, ConnectionContext *cc,
+			 struct MHD_Connection * connection,
+			 const char *url, const char *method,
+			 const char *version, const char *upload_data,
+			 size_t *upload_data_size)
+{
+  if (!cc->content_type || strncmp(cc->content_type, "application/json",16) != 0) {
     gchar detail[100];
-    g_snprintf(detail, sizeof(detail), "Only application/json supported for POST (got %s)", header->content_type ? header->content_type : "none");
+    g_snprintf(detail, sizeof(detail), "Only application/json supported for POST (got %s)", cc->content_type ? cc->content_type : "none");
     g_debug(detail);
     return error_response(connection, MHD_HTTP_UNSUPPORTED_MEDIA_TYPE,
 			  "Unsupported Media TYpe",
 			  detail);
   }
-  if (upload_data) {
-    return error_response(connection, MHD_HTTP_INTERNAL_SERVER_ERROR, "Internal Server Error", "Request too long");
+ 
+  if (strncmp("/values", url, 7) != 0) {
+    return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
-  if (*url == '/') {
-    url++;
-    if (strncmp("values", url, 6) == 0) {
-      url+=6;
-      if (*url == '/') url++;
-      return json_response(server, connection, NULL);
+  url+=7;
+  if (*url == '/') url++;
+  if (!cc->post_content) {
+    cc->post_content = g_string_new("");
+    return MHD_YES;
+  }
+  if (*upload_data_size > 0) {
+    g_string_append_len(cc->post_content, upload_data, *upload_data_size);
+    *upload_data_size = 0;
+    return MHD_YES;
+  } else {
+    int ret;
+    GError *err = NULL;
+    JsonNode *node;
+    g_mutex_lock(&server->http_mutex);
+    node = find_node(server->value_root, url);
+    if (!node) {
+      g_mutex_unlock(&server->http_mutex);
+      return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
+			    "Value not found");
     }
+    if (!server->json_parser) {
+      server->json_parser = json_parser_new();
+    }
+    if (!json_parser_load_from_data (server->json_parser, cc->post_content->str,
+				     cc->post_content->len, &err)) {
+      g_mutex_unlock(&server->http_mutex);
+      g_clear_error(&err);
+      return error_response(connection, MHD_HTTP_BAD_REQUEST, "Bad Request",
+			    "Invalid JSON");
+    }
+    if (!match_node(json_parser_get_root(server->json_parser) ,node)) {
+      g_mutex_unlock(&server->http_mutex);
+      return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
+			    "Value not found");
+    }
+    copy_node(json_parser_get_root(server->json_parser) ,node);
+    g_debug("POST data '%s'",cc->post_content->str);
+    ret = json_response(server, connection, node);
+    g_mutex_unlock(&server->http_mutex);;
+    return ret;
   }
-  return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
 }
+
+void request_completed(void *user_data, struct MHD_Connection *connection,
+		       void **con_cls, enum MHD_RequestTerminationCode toe)
+{
+  ConnectionContext *cc = *con_cls;
+  if (cc->post_content) {
+    g_string_free(cc->post_content, TRUE);
+  }
+  g_free(cc->content_type);
+  g_free(cc);
+  *con_cls = NULL;
+  g_debug("Request completed");
+}
+		       
 static int 
 request_handler(void *user_data, struct MHD_Connection * connection,
 		const char *url, const char *method,
@@ -500,34 +915,50 @@ request_handler(void *user_data, struct MHD_Connection * connection,
 {
   int res = MHD_YES;
   HTTPServer *server = user_data;
-  HeaderData header;
-  init_header_data(&header);
-  MHD_get_connection_values(connection, MHD_HEADER_KIND,
-			    collect_request_headers, &header);
-  if (server->user && (!header.auth || !check_auth(server, header.auth))) {
-    struct MHD_Response *resp;
-    resp = MHD_create_response_from_buffer(0, "", MHD_RESPMEM_PERSISTENT);
-    MHD_add_response_header(resp, "WWW-Authenticate",
-			    "Basic realm=\"DMX camera server\"");
-    MHD_add_response_header(resp, "Content-Type",
-			    "text/html; charset=UTF-8");
+  ConnectionContext *conctxt = *con_cls;
+  if (!conctxt) {
+    g_debug("New request");
+    conctxt = g_new(ConnectionContext,1);
+    conctxt->request_handler = NULL;
+    conctxt->content_type =
+      g_strdup(MHD_lookup_connection_value(connection, MHD_HEADER_KIND,
+					   "Content-Type"));
+    conctxt->post_content = NULL;
+    *con_cls = conctxt;
 
-    MHD_queue_response(connection, MHD_HTTP_UNAUTHORIZED, resp);
-    MHD_destroy_response(resp);
-    error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
-    clear_header_data(&header);
-    return MHD_YES;
+    if (!check_auth(server, connection)) {
+      struct MHD_Response *resp;
+      static const char resp_str[] =
+	"<!DOCTYPE HTML PUBLIC \"-//IETF//DTD HTML//EN\">\n"
+	"<html> <head><title>Not authorized</title></head>\n"
+	"<body><h1>Not authorized</h1>\n"
+	"<p>You have supplied the wrong username and/or password</p>"
+	"</body> </html>\n";
+      
+      resp = MHD_create_response_from_buffer(strlen(resp_str), (char*) resp_str,
+					     MHD_RESPMEM_PERSISTENT);
+      MHD_add_response_header(resp, "Content-Type",
+			      "text/html; UTF-8");
+      res = MHD_queue_basic_auth_fail_response (connection, "DMX camera server",
+						resp);
+      MHD_destroy_response(resp);
+      return res;
+    }
   }
-  if (strcmp(method, "GET") == 0) { 
-    res = handle_GET_request(server, connection, url);
-  } else if (strcmp(method, "POST") == 0) { 
-    res = handle_POST_request(server, &header, connection, url, upload_data, upload_data_size);
-  } else {
-    res = error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method Not Allowed", NULL);
+
+  if (!conctxt->request_handler) {
+    if (strcmp(method, "GET") == 0) {
+      conctxt->request_handler = handle_GET_request;
+    } else if (strcmp(method, "POST") == 0) {
+      conctxt->request_handler = handle_POST_request;
+    } else {
+      return error_response(connection, MHD_HTTP_METHOD_NOT_ALLOWED, "Method Not Allowed", NULL);
+    }
   }
-  clear_header_data(&header);
-  return res;
-}
+  return conctxt->request_handler(server, conctxt, connection,
+				  url, method, version,
+				  upload_data, upload_data_size);
+  }
 
 
 
@@ -563,6 +994,7 @@ http_server_start(HTTPServer *server, GError **err)
 		       |MHD_USE_POLL|MHD_USE_PEDANTIC_CHECKS),
 		      server->port, NULL, NULL, request_handler, server,
 		      MHD_OPTION_ARRAY, ops,
+		      MHD_OPTION_NOTIFY_COMPLETED, request_completed, server,
 		      MHD_OPTION_END);
    if (!server->daemon) {
      g_set_error(err, HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_START_FAILED,
