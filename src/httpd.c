@@ -195,7 +195,8 @@ http_server_init(HTTPServer *server)
   server->password = NULL;
   server->port = 8080;
   server->http_root = NULL;
-  server->value_root = NULL;
+  server->value_root = json_node_new(JSON_NODE_OBJECT);
+  json_node_take_object(server->value_root, json_object_new());
   server->json_generator = NULL;
   server->json_parser = NULL;
   g_mutex_init(&server->http_mutex);
@@ -404,12 +405,11 @@ create_parent_nodes(const char *path, JsonNode *new_node)
 {
   JsonNode *node;
   JsonNode *child;
-  const gchar *end = path;
-  gboolean numeric = TRUE;
+  const gchar *end;
   if (*path == '/') path++;
   if (*path == '\0') return new_node;
+  end = path;
   while(*end!='/' && *end!='\0') {
-    if (!g_ascii_isdigit(*end)) numeric = FALSE;
     end++;
   }
   if (end == path) return NULL;
@@ -417,20 +417,7 @@ create_parent_nodes(const char *path, JsonNode *new_node)
   if (!child) {
     return NULL;
   }
-  if (numeric) {
-    gint index = atoi(path);
-    JsonArray *array;
-    node = json_node_new(JSON_NODE_ARRAY);
-    if (!node) {
-      json_node_free(child);
-      return NULL;
-    }
-    array = json_node_get_array(node);
-    while(index-- > 0) {
-      json_array_add_null_element(array);
-    }
-    json_array_add_element(array, child);
-  } else {
+  {
     gchar *n;
     JsonObject *obj;
     node = json_node_new(JSON_NODE_OBJECT);
@@ -438,39 +425,20 @@ create_parent_nodes(const char *path, JsonNode *new_node)
       json_node_free(child);
       return NULL;
     }
-    obj = json_node_get_object(node);
+    obj = json_object_new();
+    json_node_take_object(node, obj);
     n = g_strndup(path, end - path);
     json_object_set_member(obj, n, child);
     g_free(n);
   }
+  return node;
 }
-#if 0
+
 static gboolean
 insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
 {
   if (*path == '/') path++;
   while(*path != '\0') {
-    
-    if (json_node_is_null(node)) {
-      gboolean numeric = TRUE;
-      guint index = 0;
-      const gchar *end;
-      while(*end!='/' && *end!='\0') {
-	if (!g_ascii_isdigit(*end)) numeric = FALSE;
-	else {
-	  index = index * 10 + g_ascii_digit_value(*path++);
-	}
-	end++;
-      }
-      if (end == path) return FALSE;
-      if (numeric) {
-	JsonArray *a = json_array_new();
-	json_node_init_array (node, a);
-      } else {
-	JsonObject *o = json_object_new();
-	json_node_init_object(node, o);
-	}
-    }
     switch(JSON_NODE_TYPE(node)) {
     case JSON_NODE_OBJECT:
       {
@@ -482,12 +450,16 @@ insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
 	n = g_strndup(path, end - path);
 	child = json_object_get_member(json_node_get_object(node), n);
 	if (!child) {
-	  child = json_node_new(JSON_NODE_NULL);
+	  JsonNode *value_node = json_node_new(JSON_NODE_VALUE);
+	  json_node_set_value (value_node, new_value);
+	  child = create_parent_nodes(end, value_node);
 	  if (!child) {
 	    g_free(n);
 	    return FALSE;
 	  }
 	  json_object_set_member(json_node_get_object(node), n, child);
+	  g_free(n);
+	  return TRUE;
 	}
 	g_free(n);
 	node = child;
@@ -495,38 +467,78 @@ insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
 	if (*path == '/') path++;
       }
       break;
-    case JSON_NODE_ARRAY:
-      {
-	JsonArray *a;
-	guint index = 0;
-	while(g_ascii_isdigit(*path)) {
-	  index = index * 10 + g_ascii_digit_value(*path++);
-	}
-	if (*path == '/') {
-	  path++;
-	} else {
-	  if (*path != '\0') return FALSE;
-	}
-	a = json_node_get_array(node);
-	/* Extend array if necessary */
-	if (index >= json_array_get_length(a)) {
-	  while (index >= json_array_get_length(a)) {
-	    json_array_add_null_element(a);
-	  }
-	}
-	node = json_array_get_element(a, index);
-      }
-      break;
-    case JSON_NODE_VALUE:
-      return FALSE;
-    case JSON_NODE_NULL:
-      /* Shouldn't happen */
+    default:
       return FALSE;
     }
   }
-  return FALSE;
+  if (!node || !JSON_NODE_HOLDS_VALUE(node)) return FALSE;
+  {
+    GValue v = G_VALUE_INIT;
+    g_value_init(&v, json_node_get_value_type(node));
+    if (!g_value_transform(new_value, &v)) return FALSE;
+    json_node_set_value(node, &v);
+    g_value_unset(&v);
+  }
+  return TRUE;
 }
-#endif
+
+gboolean
+http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value)
+{
+  gboolean res;
+  g_mutex_lock(&server->http_mutex);
+  res = insert_value(server->value_root, path, new_value);
+  g_mutex_unlock(&server->http_mutex);
+  return res;
+}
+
+gboolean
+http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value)
+{
+  gboolean res;
+  GValue v = G_VALUE_INIT;
+  g_value_init(&v, G_TYPE_BOOLEAN);
+  g_value_set_boolean(&v, value);
+  res = http_server_set_value(server, path, &v);
+  g_value_unset(&v);
+  return res;
+}
+
+gboolean
+http_server_set_int(HTTPServer *server, const gchar *path, gint64 value)
+{
+  gboolean res;
+  GValue v = G_VALUE_INIT;
+  g_value_init(&v, G_TYPE_INT64);
+  g_value_set_int64(&v, value);
+  res = http_server_set_value(server, path, &v);
+  g_value_unset(&v);
+  return res;
+}
+
+gboolean
+http_server_set_double(HTTPServer *server, const gchar *path, gdouble value)
+{
+  gboolean res;
+  GValue v = G_VALUE_INIT;
+  g_value_init(&v, G_TYPE_DOUBLE);
+  g_value_set_double(&v, value);
+  res = http_server_set_value(server, path, &v);
+  g_value_unset(&v);
+  return res;
+}
+
+gboolean
+http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str)
+{
+  gboolean res;
+  GValue v = G_VALUE_INIT;
+  g_value_init(&v, G_TYPE_STRING);
+  g_value_set_string(&v, str);
+  res = http_server_set_value(server, path, &v);
+  g_value_unset(&v);
+  return res; 
+}
 
 static int
 json_response(HTTPServer *server, struct MHD_Connection * connection,
@@ -705,9 +717,14 @@ copy_node(JsonNode *src, JsonNode *dest)
   switch(JSON_NODE_TYPE(src)) {
   case JSON_NODE_VALUE:
     {
-      GValue v = G_VALUE_INIT;
-      json_node_get_value (src, &v);
-      json_node_set_value (dest, &v);
+      GValue src_value = G_VALUE_INIT;
+      GValue dest_value = G_VALUE_INIT;
+      json_node_get_value (src, &src_value);
+      g_value_init(&dest_value, json_node_get_value_type(dest));
+      g_value_transform(&src_value, &dest_value);
+      json_node_set_value (dest, &dest_value);
+      g_value_unset(&src_value);
+      g_value_unset(&dest_value);
     }
     break;
   case JSON_NODE_NULL:

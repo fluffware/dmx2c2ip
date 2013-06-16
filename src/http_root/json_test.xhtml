@@ -9,13 +9,24 @@
     <script type="application/javascript" src="jquery_min.js">
     </script>
   </head>
-  <body>
+  <body onload="upd = new FieldUpdate('values'); upd.start()" onunload="upd.stop()">
     <h1>JSON test</h1>
     <form action="#">
       <p>
 	<button type="button" onclick="requestValues('values')">Get</button>
-	<button type="button" onclick="sendValues('values/bar',[3.4,3e6])">Send</button>
+	<button type="button" onclick="sendValues('values/bar',{0:3.4,1:3e6})">Send</button>
 	<button type="button" onclick="$('p#result').text('Foo')" >Foo</button>
+	
+      </p>
+      <p>
+	Name
+	<input type="text" name="string" id="string" path="name">
+	</input>
+	<br/>
+	Foo
+	<input type="text" name="string" id="foo" path="foo">
+	</input>
+	<button type="button" onclick="sendValues('values/name',$('input#string').val())">Send</button>
       </p>
     </form>
     <p id="result">Bar

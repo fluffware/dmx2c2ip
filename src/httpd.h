@@ -24,4 +24,20 @@ http_server_new(void);
 gboolean
 http_server_start(HTTPServer *server, GError **err);
 
+gboolean
+http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value);
+
+gboolean
+http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value);
+
+gboolean
+http_server_set_int(HTTPServer *server, const gchar *path, gint64 value);
+
+gboolean
+http_server_set_double(HTTPServer *server, const gchar *path, gdouble value);
+
+gboolean
+http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str);
+
+
 #endif /* __HTTPD_H__QAEOTYJXN0__ */
