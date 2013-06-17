@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <json-glib/json-glib.h>
+#include <httpd_marshal.h>
 
 GQuark
 http_server_error_quark()
@@ -29,11 +30,11 @@ http_server_error_quark()
 static GQuark modification_quark = 0;
 
 enum {
-  DUMMY_SIG,
+  VALUE_CHANGED,
   LAST_SIGNAL
 };
 
-/* static guint http_server_signals[LAST_SIGNAL] = {0 }; */
+static guint http_server_signals[LAST_SIGNAL] = {0 };
 
 enum
 {
@@ -48,15 +49,22 @@ enum
 struct _HTTPServer
 {
   GObject parent_instance;
+  GMainContext *signal_context;
   struct MHD_Daemon *daemon;
   gchar *user;
   gchar *password;
   guint port;
   gchar *http_root;
-  GMutex http_mutex;
+  GRWLock value_lock; /* Protects any access to value_root and its descendants */
   JsonNode *value_root;
+  GMutex generator_lock;
   JsonGenerator *json_generator;
+  GMutex parser_lock;
   JsonParser* json_parser;
+
+  GMutex signal_lock;
+  GSource *signal_idle_source;
+  gint last_notified_stamp;
 };
 
 struct _HTTPServerClass
@@ -66,8 +74,15 @@ struct _HTTPServerClass
   /* class members */
 
   /* Signals */
-
+  void (*value_changed)(HTTPServer *server, const gchar *, const GValue *);
 };
+
+static volatile gint current_modification_stamp = 1;
+static void
+modify_node(JsonNode *node);
+static void
+clear_node_tree_modification_stamps(JsonNode *node);
+
 G_DEFINE_TYPE (HTTPServer, http_server, G_TYPE_OBJECT)
 
 static void
@@ -78,17 +93,26 @@ dispose(GObject *gobj)
     MHD_stop_daemon(server->daemon);
     server->daemon = NULL;
   }
-  g_mutex_lock(&server->http_mutex);
+  /* No locks needed since the daemon isn't running anymore */
   g_clear_object(&server->json_generator);
   g_clear_object(&server->json_parser);
   if (server->value_root) {
+    clear_node_tree_modification_stamps(server->value_root);
     json_node_free(server->value_root);
     server->value_root = NULL;
   }
-  g_mutex_unlock(&server->http_mutex);
   g_free(server->user);
   g_free(server->password);
   g_free(server->http_root);
+  if (server->signal_idle_source) {
+    g_source_destroy(server->signal_idle_source);
+      server->signal_idle_source= NULL;
+  }
+  if (server->signal_context) {
+    g_main_context_unref(server->signal_context);
+    server->signal_context = NULL;
+  }
+ 
   G_OBJECT_CLASS(http_server_parent_class)->dispose(gobj);
 }
 
@@ -96,7 +120,10 @@ static void
 finalize(GObject *gobj)
 {
   HTTPServer *server = HTTP_SERVER(gobj);
-  g_mutex_clear(&server->http_mutex);
+  g_mutex_clear(&server->generator_lock);
+  g_mutex_clear(&server->parser_lock);
+  g_rw_lock_clear(&server->value_lock);
+  g_mutex_clear(&server->signal_lock);
   G_OBJECT_CLASS(http_server_parent_class)->finalize(gobj);
 }
 
@@ -155,17 +182,22 @@ get_property (GObject *object, guint property_id,
 }
 
 static void
+value_changed(HTTPServer *server, const gchar *path, const GValue *value)
+{
+}
+
+static void
 http_server_class_init (HTTPServerClass *klass)
 {
   GParamSpec *properties[N_PROPERTIES];
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   
-  /* HTTPServerClass *server_class = HTTP_SERVER_CLASS(klass); */
+  HTTPServerClass *server_class = HTTP_SERVER_CLASS(klass);
   gobject_class->dispose = dispose;
   gobject_class->finalize = finalize;
   gobject_class->set_property = set_property;
   gobject_class->get_property = get_property;
-
+  server_class->value_changed = value_changed;
   properties[0] = NULL;
   properties[PROP_USER]
     =  g_param_spec_string("user", "user", "User for athentication",
@@ -181,6 +213,13 @@ http_server_class_init (HTTPServerClass *klass)
     =  g_param_spec_string("http-root", "root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
+  http_server_signals[VALUE_CHANGED] =
+    g_signal_new("value-changed",
+		 G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST,
+		 G_STRUCT_OFFSET(HTTPServerClass, value_changed),
+		 NULL, NULL,
+		 httpd_marshal_VOID__STRING_BOXED,
+		 G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_BOXED);
   if (!modification_quark) {
     modification_quark =
       g_quark_from_static_string ("HTTPServer-modification-stamp");
@@ -199,7 +238,46 @@ http_server_init(HTTPServer *server)
   json_node_take_object(server->value_root, json_object_new());
   server->json_generator = NULL;
   server->json_parser = NULL;
-  g_mutex_init(&server->http_mutex);
+  g_mutex_init(&server->generator_lock);
+  g_mutex_init(&server->parser_lock);
+  g_rw_lock_init(&server->value_lock);
+  server->signal_context = g_main_context_ref_thread_default();
+  g_mutex_init(&server->signal_lock);
+  server->signal_idle_source = NULL;
+  server->last_notified_stamp = 0;
+}
+
+static gboolean
+idle_notify_modification(gpointer user_data)
+{
+  HTTPServer *server = user_data;
+  gint now;
+  const gchar *path = "/foo";
+  GValue value;
+  g_value_init(&value, G_TYPE_STRING);
+  g_mutex_lock(&server->signal_lock);
+  now = g_atomic_int_get (&current_modification_stamp);
+  g_signal_emit(server, http_server_signals[VALUE_CHANGED],
+		g_quark_from_string (path), path, &value);
+  g_value_unset(&value);
+  server->last_notified_stamp = now;
+  server->signal_idle_source = NULL;
+  g_mutex_unlock(&server->signal_lock);
+  g_debug("Values changed");
+  return FALSE;
+}
+
+void
+notify_modification(HTTPServer *server)
+{
+  g_mutex_lock(&server->signal_lock);
+  if (!server->signal_idle_source) {
+    server->signal_idle_source = g_idle_source_new();
+    g_source_set_callback (server->signal_idle_source,
+			   idle_notify_modification, server, NULL);
+    g_source_attach(server->signal_idle_source, server->signal_context);
+  }
+  g_mutex_unlock(&server->signal_lock);
 }
 
 static int
@@ -242,20 +320,6 @@ error_response(struct MHD_Connection * connection,
 }
 
 
-#if 0
-static void
-clear_header_data(HeaderData *hd)
-{
-  if (hd->auth) {
-    g_free(hd->auth);
-    hd->auth = NULL;
-  }
-  if (hd->content_type) {
-    g_free(hd->content_type);
-    hd->content_type = NULL;
-  }
-}
-#endif
 
 typedef struct _ConnectionContext ConnectionContext;
 
@@ -434,6 +498,15 @@ create_parent_nodes(const char *path, JsonNode *new_node)
   return node;
 }
 
+static JsonNode *
+create_value_node(const GValue *new_value)
+{
+   JsonNode *node = json_node_new(JSON_NODE_VALUE);
+   json_node_set_value (node, new_value);
+   modify_node(node);
+   return node;
+}
+
 static gboolean
 insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
 {
@@ -450,8 +523,7 @@ insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
 	n = g_strndup(path, end - path);
 	child = json_object_get_member(json_node_get_object(node), n);
 	if (!child) {
-	  JsonNode *value_node = json_node_new(JSON_NODE_VALUE);
-	  json_node_set_value (value_node, new_value);
+	  JsonNode *value_node = create_value_node(new_value);
 	  child = create_parent_nodes(end, value_node);
 	  if (!child) {
 	    g_free(n);
@@ -478,6 +550,7 @@ insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
     if (!g_value_transform(new_value, &v)) return FALSE;
     json_node_set_value(node, &v);
     g_value_unset(&v);
+    modify_node(node);
   }
   return TRUE;
 }
@@ -486,9 +559,10 @@ gboolean
 http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value)
 {
   gboolean res;
-  g_mutex_lock(&server->http_mutex);
+  g_rw_lock_writer_lock(&server->value_lock);
   res = insert_value(server->value_root, path, new_value);
-  g_mutex_unlock(&server->http_mutex);
+  g_rw_lock_writer_unlock(&server->value_lock);
+  notify_modification(server);
   return res;
 }
 
@@ -548,11 +622,13 @@ json_response(HTTPServer *server, struct MHD_Connection * connection,
   gsize resp_len;
   struct MHD_Response * resp;
   if (node) {
+    g_mutex_lock(&server->generator_lock);
     if (!server->json_generator) {
       server->json_generator = json_generator_new();
     }
     json_generator_set_root(server->json_generator, node);
     resp_str = json_generator_to_data (server->json_generator, &resp_len);
+    g_mutex_unlock(&server->generator_lock);
   } else {
     resp_str = g_strdup("null");
   }
@@ -575,14 +651,14 @@ values_response(HTTPServer *server,
     g_warning("No value root");
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
-  g_mutex_lock(&server->http_mutex);
+  g_rw_lock_reader_lock(&server->value_lock);
   root = find_node(server->value_root, url);
   if (!root) {
-    g_mutex_unlock(&server->http_mutex);
+    g_rw_lock_reader_unlock(&server->value_lock);
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
   ret = json_response(server, connection, root);
-  g_mutex_unlock(&server->http_mutex);
+  g_rw_lock_reader_unlock(&server->value_lock);
   return ret; 
 }
 
@@ -725,6 +801,7 @@ copy_node(JsonNode *src, JsonNode *dest)
       json_node_set_value (dest, &dest_value);
       g_value_unset(&src_value);
       g_value_unset(&dest_value);
+      modify_node(dest);
     }
     break;
   case JSON_NODE_NULL:
@@ -748,12 +825,12 @@ copy_node(JsonNode *src, JsonNode *dest)
 
 /* Modification time stamps */
 
-static gpointer current_modification_stamp = GSIZE_TO_POINTER(1);
+
 
 static void
 modify_node(JsonNode *node)
 {
-  gssize stamp = g_atomic_pointer_add(&current_modification_stamp, (gssize)1);
+  gssize stamp = g_atomic_int_add(&current_modification_stamp, 1);
   
   g_dataset_id_set_data(node, modification_quark, GSIZE_TO_POINTER(stamp));
 }
@@ -881,10 +958,10 @@ handle_POST_request(HTTPServer *server, ConnectionContext *cc,
     int ret;
     GError *err = NULL;
     JsonNode *node;
-    g_mutex_lock(&server->http_mutex);
+    g_rw_lock_writer_lock(&server->value_lock);
     node = find_node(server->value_root, url);
     if (!node) {
-      g_mutex_unlock(&server->http_mutex);
+      g_rw_lock_writer_unlock(&server->value_lock);
       return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
 			    "Value not found");
     }
@@ -893,20 +970,21 @@ handle_POST_request(HTTPServer *server, ConnectionContext *cc,
     }
     if (!json_parser_load_from_data (server->json_parser, cc->post_content->str,
 				     cc->post_content->len, &err)) {
-      g_mutex_unlock(&server->http_mutex);
+      g_rw_lock_writer_unlock(&server->value_lock);
       g_clear_error(&err);
       return error_response(connection, MHD_HTTP_BAD_REQUEST, "Bad Request",
 			    "Invalid JSON");
     }
     if (!match_node(json_parser_get_root(server->json_parser) ,node)) {
-      g_mutex_unlock(&server->http_mutex);
+      g_rw_lock_writer_unlock(&server->value_lock);
       return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
 			    "Value not found");
     }
     copy_node(json_parser_get_root(server->json_parser) ,node);
     g_debug("POST data '%s'",cc->post_content->str);
     ret = json_response(server, connection, node);
-    g_mutex_unlock(&server->http_mutex);;
+    g_rw_lock_writer_unlock(&server->value_lock);
+    notify_modification(server);
     return ret;
   }
 }
@@ -921,7 +999,7 @@ void request_completed(void *user_data, struct MHD_Connection *connection,
   g_free(cc->content_type);
   g_free(cc);
   *con_cls = NULL;
-  g_debug("Request completed");
+  /* g_debug("Request completed"); */
 }
 		       
 static int 
@@ -934,7 +1012,7 @@ request_handler(void *user_data, struct MHD_Connection * connection,
   HTTPServer *server = user_data;
   ConnectionContext *conctxt = *con_cls;
   if (!conctxt) {
-    g_debug("New request");
+    /* g_debug("New request"); */
     conctxt = g_new(ConnectionContext,1);
     conctxt->request_handler = NULL;
     conctxt->content_type =
