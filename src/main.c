@@ -64,9 +64,18 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   g_free(str);
 }
 
+void value_changed_cb(HTTPServer *server, GQuark path, const GValue *value,
+		      AppContext *app)
+{
+  gchar *vstr = g_strdup_value_contents(value);
+  g_debug("%s = %s", g_quark_to_string(path),vstr);
+  g_free(vstr);
+}
+
 static void
 configure_http_server(AppContext *app)
 {
+  GQuark id;
   GError *err = NULL;
   guint port;
   port = g_key_file_get_integer(app_ctxt.config_file, "HTTP", "Port", &err);
@@ -81,12 +90,14 @@ configure_http_server(AppContext *app)
 			    app_ctxt.config_file, "HTTP", "Password");
   configure_string_property(app->http_server, "http-root",
 			    app_ctxt.config_file, "HTTP", "Root");
-
-  http_server_set_int(app->http_server, "/foo", 78);
-  http_server_set_double(app->http_server, "/bar/0", 3.1415);
-  http_server_set_double(app->http_server, "/bar/1", -1.41);
-  http_server_set_boolean(app->http_server, "/up", TRUE);
-  http_server_set_string(app->http_server, "/name", "DMX server");
+  
+  id = http_server_set_int(app->http_server, "foo", 78, NULL);
+  g_signal_connect(app->http_server, "value-changed", (GCallback)value_changed_cb, app);
+  http_server_set_double(app->http_server, "bar/0", 3.1415, NULL);
+  http_server_set_double(app->http_server, "bar/1", -1.41, NULL);
+  http_server_set_boolean(app->http_server, "up", TRUE, NULL);
+  http_server_set_string(app->http_server, "name", "DMX server", NULL);
+  http_server_set_string(app->http_server, "l1/l2/l3/str1", "Deep", NULL);
 }
 
 

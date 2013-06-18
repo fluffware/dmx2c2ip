@@ -27,7 +27,6 @@ http_server_error_quark()
   return error_quark;
 }
 
-static GQuark modification_quark = 0;
 
 enum {
   VALUE_CHANGED,
@@ -57,6 +56,8 @@ struct _HTTPServer
   gchar *http_root;
   GRWLock value_lock; /* Protects any access to value_root and its descendants */
   JsonNode *value_root;
+  GData *json_nodes; /* A map of JSON nodes */
+  
   GMutex generator_lock;
   JsonGenerator *json_generator;
   GMutex parser_lock;
@@ -64,7 +65,7 @@ struct _HTTPServer
 
   GMutex signal_lock;
   GSource *signal_idle_source;
-  gint last_notified_stamp;
+  GData *pending_changes;
 };
 
 struct _HTTPServerClass
@@ -74,14 +75,20 @@ struct _HTTPServerClass
   /* class members */
 
   /* Signals */
-  void (*value_changed)(HTTPServer *server, const gchar *, const GValue *);
+  void (*value_changed)(HTTPServer *server, GQuark, const GValue *);
 };
 
-static volatile gint current_modification_stamp = 1;
-static void
-modify_node(JsonNode *node);
-static void
-clear_node_tree_modification_stamps(JsonNode *node);
+
+/* Forward declarations */
+
+JsonNode *
+get_node(HTTPServer *server, const gchar *path, GError **err);
+static gboolean
+delete_node(HTTPServer *server, const gchar *path, GError **err);
+
+static GQuark
+insert_value(HTTPServer *server, const gchar *path, const GValue *value,
+	     gboolean extend, GError **err);
 
 G_DEFINE_TYPE (HTTPServer, http_server, G_TYPE_OBJECT)
 
@@ -97,13 +104,14 @@ dispose(GObject *gobj)
   g_clear_object(&server->json_generator);
   g_clear_object(&server->json_parser);
   if (server->value_root) {
-    clear_node_tree_modification_stamps(server->value_root);
-    json_node_free(server->value_root);
+    delete_node(server, "/", NULL);
+    g_datalist_clear(&server->json_nodes);
     server->value_root = NULL;
   }
   g_free(server->user);
   g_free(server->password);
   g_free(server->http_root);
+  g_datalist_clear(&server->pending_changes);
   if (server->signal_idle_source) {
     g_source_destroy(server->signal_idle_source);
       server->signal_idle_source= NULL;
@@ -112,7 +120,7 @@ dispose(GObject *gobj)
     g_main_context_unref(server->signal_context);
     server->signal_context = NULL;
   }
- 
+  
   G_OBJECT_CLASS(http_server_parent_class)->dispose(gobj);
 }
 
@@ -182,7 +190,7 @@ get_property (GObject *object, guint property_id,
 }
 
 static void
-value_changed(HTTPServer *server, const gchar *path, const GValue *value)
+value_changed(HTTPServer *server, GQuark path, const GValue *value)
 {
 }
 
@@ -215,15 +223,12 @@ http_server_class_init (HTTPServerClass *klass)
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
   http_server_signals[VALUE_CHANGED] =
     g_signal_new("value-changed",
-		 G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST,
+		 G_OBJECT_CLASS_TYPE (gobject_class),
+		 G_SIGNAL_RUN_LAST|G_SIGNAL_DETAILED,
 		 G_STRUCT_OFFSET(HTTPServerClass, value_changed),
 		 NULL, NULL,
-		 httpd_marshal_VOID__STRING_BOXED,
-		 G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_BOXED);
-  if (!modification_quark) {
-    modification_quark =
-      g_quark_from_static_string ("HTTPServer-modification-stamp");
-  }
+		 g_cclosure_marshal_VOID__UINT_POINTER,
+		 G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_POINTER);
 }
 
 static void
@@ -234,8 +239,11 @@ http_server_init(HTTPServer *server)
   server->password = NULL;
   server->port = 8080;
   server->http_root = NULL;
+  g_datalist_init(&server->json_nodes);
   server->value_root = json_node_new(JSON_NODE_OBJECT);
   json_node_take_object(server->value_root, json_object_new());
+  g_datalist_id_set_data(&server->json_nodes,
+			 g_quark_from_static_string(""), server->value_root);
   server->json_generator = NULL;
   server->json_parser = NULL;
   g_mutex_init(&server->generator_lock);
@@ -244,26 +252,33 @@ http_server_init(HTTPServer *server)
   server->signal_context = g_main_context_ref_thread_default();
   g_mutex_init(&server->signal_lock);
   server->signal_idle_source = NULL;
-  server->last_notified_stamp = 0;
+  g_datalist_init(&server->pending_changes);
+}
+
+static void
+signal_each_update(GQuark key_id, gpointer data, gpointer user_data)
+{
+  HTTPServer *server = user_data;
+  g_signal_emit(server, http_server_signals[VALUE_CHANGED],
+		key_id, key_id, (GValue*)data);
 }
 
 static gboolean
 idle_notify_modification(gpointer user_data)
 {
   HTTPServer *server = user_data;
-  gint now;
-  const gchar *path = "/foo";
-  GValue value;
-  g_value_init(&value, G_TYPE_STRING);
+  GData *pending;
   g_mutex_lock(&server->signal_lock);
-  now = g_atomic_int_get (&current_modification_stamp);
-  g_signal_emit(server, http_server_signals[VALUE_CHANGED],
-		g_quark_from_string (path), path, &value);
-  g_value_unset(&value);
-  server->last_notified_stamp = now;
+  /* Make a private copy of the list and clear the list in the object so
+     the server can use it for new updates. */
+  pending = server->pending_changes;
+  g_datalist_init(&server->pending_changes);
   server->signal_idle_source = NULL;
+  /* Don't need the lock anymore since we have a private copy of the list. */
   g_mutex_unlock(&server->signal_lock);
-  g_debug("Values changed");
+  /* Emit the signal for each node that has changed */
+  g_datalist_foreach(&pending, signal_each_update, server);
+  g_datalist_clear(&pending);
   return FALSE;
 }
 
@@ -425,59 +440,35 @@ file_response(HTTPServer *server,
   return MHD_YES;
 }
 
+/* Node tree manipulation */
 JsonNode *
-find_node(JsonNode *node, const gchar *path)
+get_node(HTTPServer *server, const gchar *pathstr, GError **err)
 {
-  while(node && *path) {
-    if (*path == '/') return NULL;
-    switch(JSON_NODE_TYPE(node)) {
-    case JSON_NODE_OBJECT:
-      {
-	gchar *n;
-	const gchar *end = path;
-	while(*end!='/' && *end!='\0') end++;
-	if (end == path) return NULL;
-	n = g_strndup(path, end - path);
-	node = json_object_get_member(json_node_get_object(node), n);
-	g_free(n);
-	path = end;
-      }
-      break;
-    case JSON_NODE_ARRAY:
-      {
-	JsonArray *a;
-	guint index = 0;
-	while(g_ascii_isdigit(*path)) {
-	  index = index * 10 + g_ascii_digit_value(*path++);
-	}
-	if (*path != '/' && *path != '\0') return NULL;
-	a = json_node_get_array(node);
-	if (index >= json_array_get_length(a)) return NULL;
-	node = json_array_get_element(a, index);
-      }
-      break;
-    default:
-      return NULL;
-    }
-    if (*path == '/') path++;
+  JsonNode *node;
+  if (*pathstr == '/') pathstr++;
+  node = g_datalist_id_get_data(&server->json_nodes,
+				g_quark_from_string(pathstr));
+  if (!node) {
+    g_set_error(err,HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_NODE_NOT_FOUND,
+		"Node not found");
   }
   return node;
 }
 
 static JsonNode *
-create_parent_nodes(const char *path, JsonNode *new_node)
+create_parent_nodes(HTTPServer *server, const char *path, const char *child_path, JsonNode *new_node, GError **err)
 {
   JsonNode *node;
   JsonNode *child;
   const gchar *end;
-  if (*path == '/') path++;
-  if (*path == '\0') return new_node;
-  end = path;
+  if (*child_path == '/') child_path++;
+  if (*child_path == '\0') return new_node;
+  end = child_path;
   while(*end!='/' && *end!='\0') {
     end++;
   }
   if (end == path) return NULL;
-  child = create_parent_nodes(end, new_node);
+  child = create_parent_nodes(server, path, end, new_node, err);
   if (!child) {
     return NULL;
   }
@@ -487,12 +478,17 @@ create_parent_nodes(const char *path, JsonNode *new_node)
     node = json_node_new(JSON_NODE_OBJECT);
     if (!node) {
       json_node_free(child);
+      g_set_error(err, HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_INTERNAL,
+		  "Failed to create node");
       return NULL;
     }
     obj = json_object_new();
     json_node_take_object(node, obj);
-    n = g_strndup(path, end - path);
+    n = g_strndup(child_path, end - child_path);
     json_object_set_member(obj, n, child);
+    g_free(n);
+    n = g_strndup(path, child_path - path - 1);
+    g_datalist_set_data(&server->json_nodes, n, node);
     g_free(n);
   }
   return node;
@@ -503,113 +499,192 @@ create_value_node(const GValue *new_value)
 {
    JsonNode *node = json_node_new(JSON_NODE_VALUE);
    json_node_set_value (node, new_value);
-   modify_node(node);
    return node;
 }
 
-static gboolean
-insert_value(JsonNode *node, const gchar *path, const GValue *new_value)
+static void
+g_value_free(gpointer d)
 {
-  if (*path == '/') path++;
-  while(*path != '\0') {
-    switch(JSON_NODE_TYPE(node)) {
-    case JSON_NODE_OBJECT:
-      {
-	JsonNode *child;
-	gchar *n;
-	const gchar *end = path;
-	while(*end!='/' && *end!='\0') end++;
-	if (end == path) return FALSE;
-	n = g_strndup(path, end - path);
-	child = json_object_get_member(json_node_get_object(node), n);
-	if (!child) {
-	  JsonNode *value_node = create_value_node(new_value);
-	  child = create_parent_nodes(end, value_node);
-	  if (!child) {
-	    g_free(n);
-	    return FALSE;
+  GValue *v = d;
+  g_value_unset(v);
+  g_free(v);
+}
+  
+static void
+pending_change(HTTPServer *server, const gchar *pathstr, const GValue *value)
+{
+  GValue *v = g_new0(GValue,1);
+  g_value_init(v, G_VALUE_TYPE(value));
+  g_value_copy(value, v);
+  g_datalist_set_data_full(&server->pending_changes, pathstr, v, g_value_free);
+}
+
+static GQuark
+insert_value(HTTPServer *server, const gchar *pathstr, const GValue *new_value,
+	     gboolean extend, GError **err)
+{
+  JsonNode *node;
+  g_return_val_if_fail(*pathstr != '/', 0);
+  node = g_datalist_get_data(&server->json_nodes, pathstr);
+  if (node) {
+    GValue v = G_VALUE_INIT;
+    if (!JSON_NODE_HOLDS_VALUE(node)) {
+      g_set_error(err,
+		  HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_NODE_HAS_DIFFERENT_TYPE,
+		  "Not a value node");
+      return 0;
+    }
+    g_value_init(&v, json_node_get_value_type(node));
+    if (!g_value_transform(new_value, &v)) {
+      g_set_error(err,
+		  HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_NODE_HAS_DIFFERENT_TYPE,
+		  "Incompatible value types");
+       return 0;
+    }
+    json_node_set_value(node, &v);
+    pending_change(server, pathstr, &v);
+    g_value_unset(&v);
+  } else {
+    const gchar *path_suffix;
+    if (!extend) {
+      g_set_error(err,
+		  HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_NODE_NOT_FOUND,
+		  "Path outside tree");
+      return 0;
+    }
+    path_suffix = pathstr;
+    node = server->value_root;
+    while(*path_suffix != '\0') {
+      switch(JSON_NODE_TYPE(node)) {
+      case JSON_NODE_OBJECT:
+	{
+	  JsonNode *child;
+	  gchar *n;
+	  const gchar *end = path_suffix;
+	  while(*end!='/' && *end!='\0') end++;
+	  if (end == path_suffix) {
+	    g_set_error(err,
+			HTTP_SERVER_ERROR, HTTP_SERVER_ERROR_INVALID_PATH,
+			"Empty path element");
+	    return 0;
 	  }
-	  json_object_set_member(json_node_get_object(node), n, child);
+	  n = g_strndup(path_suffix, end - path_suffix);
+	  child = json_object_get_member(json_node_get_object(node), n);
+	  if (!child) {
+	    JsonNode *value_node = create_value_node(new_value);
+	    child = create_parent_nodes(server, pathstr, end, value_node, err);
+	    if (!child) {
+	      json_node_free(value_node);
+	      g_free(n);
+	      return 0;
+	    }
+	    json_object_set_member(json_node_get_object(node), n, child);
+	    g_free(n);
+	    g_datalist_set_data(&server->json_nodes, pathstr, value_node);
+	    pending_change(server, pathstr, new_value);
+	    return TRUE;
+	  }
 	  g_free(n);
-	  return TRUE;
+	  node = child;
+	  path_suffix = end;
+	  if (*path_suffix == '/') path_suffix++;
 	}
-	g_free(n);
-	node = child;
-	path = end;
-	if (*path == '/') path++;
+	break;
+      default:
+	return 0;
       }
-      break;
-    default:
-      return FALSE;
     }
   }
-  if (!node || !JSON_NODE_HOLDS_VALUE(node)) return FALSE;
-  {
-    GValue v = G_VALUE_INIT;
-    g_value_init(&v, json_node_get_value_type(node));
-    if (!g_value_transform(new_value, &v)) return FALSE;
-    json_node_set_value(node, &v);
-    g_value_unset(&v);
-    modify_node(node);
+  return g_quark_from_string(pathstr);
+}
+
+struct DeleteNodeContext
+{
+  const gchar *prefix;
+  GData **list;
+};
+
+static void
+delete_node_node_callback(GQuark key_id, gpointer data, gpointer user_data)
+{
+  struct DeleteNodeContext *ctxt = user_data;
+  if (g_str_has_prefix(g_quark_to_string(key_id), ctxt->prefix)) {
+    g_datalist_id_remove_no_notify(ctxt->list, key_id);
   }
+}
+
+static gboolean
+delete_node(HTTPServer *server, const gchar *pathstr, GError **err)
+{
+  struct DeleteNodeContext ctxt;
+  JsonNode *node = get_node(server, pathstr, err);
+  if (!node) return FALSE;
+  ctxt.list = &server->json_nodes;
+  ctxt.prefix = pathstr;
+  g_datalist_foreach(&server->json_nodes, delete_node_node_callback, &ctxt);
+  json_node_free(node);
   return TRUE;
 }
 
-gboolean
-http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value)
+GQuark
+http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value, GError **err)
 {
   gboolean res;
   g_rw_lock_writer_lock(&server->value_lock);
-  res = insert_value(server->value_root, path, new_value);
+  res = insert_value(server, path, new_value, TRUE, err);
   g_rw_lock_writer_unlock(&server->value_lock);
   notify_modification(server);
   return res;
 }
 
-gboolean
-http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value)
+GQuark
+http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value,
+			GError **err)
 {
-  gboolean res;
+  GQuark res;
   GValue v = G_VALUE_INIT;
   g_value_init(&v, G_TYPE_BOOLEAN);
   g_value_set_boolean(&v, value);
-  res = http_server_set_value(server, path, &v);
+  res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
   return res;
 }
 
-gboolean
-http_server_set_int(HTTPServer *server, const gchar *path, gint64 value)
+GQuark
+http_server_set_int(HTTPServer *server, const gchar *path, gint64 value,
+			GError **err)
 {
-  gboolean res;
+  GQuark res;
   GValue v = G_VALUE_INIT;
   g_value_init(&v, G_TYPE_INT64);
   g_value_set_int64(&v, value);
-  res = http_server_set_value(server, path, &v);
+  res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
   return res;
 }
 
-gboolean
-http_server_set_double(HTTPServer *server, const gchar *path, gdouble value)
+GQuark
+http_server_set_double(HTTPServer *server, const gchar *path, gdouble value,
+			GError **err)
 {
-  gboolean res;
+  GQuark res;
   GValue v = G_VALUE_INIT;
   g_value_init(&v, G_TYPE_DOUBLE);
   g_value_set_double(&v, value);
-  res = http_server_set_value(server, path, &v);
+  res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
   return res;
 }
 
-gboolean
-http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str)
+GQuark
+http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str,
+			GError **err)
 {
-  gboolean res;
+  GQuark res;
   GValue v = G_VALUE_INIT;
   g_value_init(&v, G_TYPE_STRING);
   g_value_set_string(&v, str);
-  res = http_server_set_value(server, path, &v);
+  res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
   return res; 
 }
@@ -652,7 +727,7 @@ values_response(HTTPServer *server,
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
   g_rw_lock_reader_lock(&server->value_lock);
-  root = find_node(server->value_root, url);
+  root = get_node(server, url, NULL);
   if (!root) {
     g_rw_lock_reader_unlock(&server->value_lock);
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
@@ -763,15 +838,28 @@ match_node(JsonNode *src, JsonNode *dest)
 
 
 static void
-copy_node(JsonNode *src, JsonNode *dest);
+copy_node(HTTPServer *server, const gchar *pathstr,
+	  JsonNode *src, JsonNode *dest);
+
+struct CopyNodeContext
+{
+  HTTPServer *server;
+  const gchar *pathstr;
+  union {
+    JsonObject *obj;
+    JsonArray *array;
+  } dest;
+};
 
 static void
 copy_object(JsonObject *src, const gchar *name, JsonNode *src_member, gpointer data)
 {
-  JsonObject *dest_obj = data;
-  JsonNode *dest_member = json_object_get_member(dest_obj, name);
+  struct CopyNodeContext *ctxt = data;
+  JsonNode *dest_member = json_object_get_member(ctxt->dest.obj, name);
   if (dest_member) {
-    copy_node(src_member, dest_member);
+    gchar *child_path = g_strconcat(ctxt->pathstr, "/", name, NULL);
+    copy_node(ctxt->server, child_path, src_member, dest_member);
+    g_free(child_path);
   }
 }
 
@@ -780,15 +868,35 @@ static void
 copy_array(JsonArray *src,guint index, JsonNode *element_node,
 	    gpointer data)
 {
-  JsonArray *dest_array = data;
-  JsonNode *dest_element = json_array_get_element(dest_array, index);
+  struct CopyNodeContext *ctxt = data;
+  JsonNode *dest_element = json_array_get_element(ctxt->dest.array, index);
   if (dest_element) {
-    copy_node(element_node, dest_element);
+    gchar *child_path = g_strdup_printf("%s/%d",ctxt->pathstr, index);
+    copy_node(ctxt->server, child_path, element_node, dest_element);
+    g_free(child_path);
   }
 }
 
+/* Check if the of the value of the node equals the supplied value */
+static gboolean
+node_value_equal(JsonNode *node, const GValue *value)
+{
+  switch(json_node_get_value_type(node)) {
+  case G_TYPE_INT64:
+    return g_value_get_int64(value) == json_node_get_int(node);
+  case G_TYPE_DOUBLE:
+    return g_value_get_double(value) == json_node_get_double(node);
+  case G_TYPE_BOOLEAN:
+    return g_value_get_boolean(value) == json_node_get_boolean(node);
+  case G_TYPE_STRING:
+    return strcmp(g_value_get_string(value),json_node_get_string(node)) == 0;
+  }
+  return FALSE;
+}
+
 static void
-copy_node(JsonNode *src, JsonNode *dest)
+copy_node(HTTPServer *server, const gchar *pathstr,
+	  JsonNode *src, JsonNode *dest)
 {
   switch(JSON_NODE_TYPE(src)) {
   case JSON_NODE_VALUE:
@@ -798,131 +906,40 @@ copy_node(JsonNode *src, JsonNode *dest)
       json_node_get_value (src, &src_value);
       g_value_init(&dest_value, json_node_get_value_type(dest));
       g_value_transform(&src_value, &dest_value);
-      json_node_set_value (dest, &dest_value);
+      if (!node_value_equal(dest, &dest_value)) {
+	json_node_set_value (dest, &dest_value);
+	if (*pathstr == '/') pathstr++;
+	pending_change(server, pathstr, &dest_value);
+      }
       g_value_unset(&src_value);
       g_value_unset(&dest_value);
-      modify_node(dest);
     }
     break;
   case JSON_NODE_NULL:
     break;
   case JSON_NODE_OBJECT:
     {
+      struct CopyNodeContext ctxt;
       JsonObject *src_obj = json_node_get_object(src);
-      JsonObject *dest_obj = json_node_get_object(dest);
-      json_object_foreach_member(src_obj, copy_object, dest_obj);
+      ctxt.server = server;
+      ctxt.pathstr = pathstr;
+      ctxt.dest.obj = json_node_get_object(dest);
+      json_object_foreach_member(src_obj, copy_object, &ctxt);
     }
     break;
   case JSON_NODE_ARRAY:
     {
+      struct CopyNodeContext ctxt;
       JsonArray *src_array = json_node_get_array(src);
-      JsonArray *dest_array = json_node_get_array(dest);
-      json_array_foreach_element(src_array, copy_array, dest_array);
+      ctxt.server = server;
+      ctxt.pathstr = pathstr;
+      ctxt.dest.array = json_node_get_array(dest);
+      json_array_foreach_element(src_array, copy_array, &ctxt);
     }
     break;
   }
 }
 
-/* Modification time stamps */
-
-
-
-static void
-modify_node(JsonNode *node)
-{
-  gssize stamp = g_atomic_int_add(&current_modification_stamp, 1);
-  
-  g_dataset_id_set_data(node, modification_quark, GSIZE_TO_POINTER(stamp));
-}
-
-static void
-init_node_tree_modification_stamps(JsonNode *node);
-
-static void init_node_tree_modification_object(JsonObject *obj, const gchar *member_name, JsonNode *member_node, gpointer data)
-{
-  init_node_tree_modification_stamps(member_node);
-}
-
-static void
-init_node_tree_modification_array(JsonArray *node,
-				  guint index, JsonNode *element_node,
-				  gpointer data)
-{
-  init_node_tree_modification_stamps(element_node);
-}
-
-static void
-init_node_tree_modification_stamps(JsonNode *node)
-{
-  
-  switch(JSON_NODE_TYPE(node)) {
-  case JSON_NODE_VALUE:
-    modify_node(node);
-    break;
-  case JSON_NODE_NULL:
-    modify_node(node);
-    break;
-  case JSON_NODE_OBJECT:
-    {
-      JsonObject *obj = json_node_get_object(node);
-      json_object_foreach_member(obj, init_node_tree_modification_object, NULL);
-    }
-    break;
-  case JSON_NODE_ARRAY:
-    {
-      JsonArray *array = json_node_get_array(node);
-      json_array_foreach_element(array, init_node_tree_modification_array,NULL);
-    }
-    break;
-  }
-}
-
-static void
-clear_node_modification(JsonNode *node) {
-  g_dataset_id_remove_data(node, modification_quark);
-}
-
-static void
-clear_node_tree_modification_stamps(JsonNode *node);
-
-static void clear_node_tree_modification_object(JsonObject *obj, const gchar *member_name, JsonNode *member_node, gpointer data)
-{
-  clear_node_tree_modification_stamps(member_node);
-}
-
-static void
-clear_node_tree_modification_array(JsonArray *node,
-				  guint index, JsonNode *element_node,
-				  gpointer data)
-{
-  clear_node_tree_modification_stamps(element_node);
-}
-
-static void
-clear_node_tree_modification_stamps(JsonNode *node)
-{
-  
-  switch(JSON_NODE_TYPE(node)) {
-  case JSON_NODE_VALUE:
-    clear_node_modification(node);
-    break;
-  case JSON_NODE_NULL:
-    clear_node_modification(node);
-    break;
-  case JSON_NODE_OBJECT:
-    {
-      JsonObject *obj = json_node_get_object(node);
-      json_object_foreach_member(obj, clear_node_tree_modification_object, NULL);
-    }
-    break;
-  case JSON_NODE_ARRAY:
-    {
-      JsonArray *array = json_node_get_array(node);
-      json_array_foreach_element(array, clear_node_tree_modification_array,NULL);
-    }
-    break;
-  }
-}
 
 
 static int
@@ -945,7 +962,6 @@ handle_POST_request(HTTPServer *server, ConnectionContext *cc,
     return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   }
   url+=7;
-  if (*url == '/') url++;
   if (!cc->post_content) {
     cc->post_content = g_string_new("");
     return MHD_YES;
@@ -959,7 +975,7 @@ handle_POST_request(HTTPServer *server, ConnectionContext *cc,
     GError *err = NULL;
     JsonNode *node;
     g_rw_lock_writer_lock(&server->value_lock);
-    node = find_node(server->value_root, url);
+    node = get_node(server, url, &err);
     if (!node) {
       g_rw_lock_writer_unlock(&server->value_lock);
       return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
@@ -980,7 +996,7 @@ handle_POST_request(HTTPServer *server, ConnectionContext *cc,
       return error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found",
 			    "Value not found");
     }
-    copy_node(json_parser_get_root(server->json_parser) ,node);
+    copy_node(server, url,  json_parser_get_root(server->json_parser) ,node);
     g_debug("POST data '%s'",cc->post_content->str);
     ret = json_response(server, connection, node);
     g_rw_lock_writer_unlock(&server->value_lock);
