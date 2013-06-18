@@ -108,6 +108,7 @@ function FieldUpdate(url)
 	$("input[path]").each(function(index,element) 
 				   {
 				       if (!element.editing) {
+					   console.log(element.getValue);
 					   element.value = eval(element.getValue);
 				       }
 				   });

@@ -17,4 +17,7 @@ typedef struct _DMXRecvClass DMXRecvClass;
 DMXRecv *
 dmx_recv_new(const char *device, GError **err);
 
+gboolean
+dmx_recv_channels_changed(DMXRecv *recv, guint from, guint to);
+
 #endif /* __DMX_RECV_H__QDGKDUOV0E__ */

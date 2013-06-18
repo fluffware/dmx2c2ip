@@ -100,6 +100,18 @@ configure_http_server(AppContext *app)
   http_server_set_string(app->http_server, "l1/l2/l3/str1", "Deep", NULL);
 }
 
+static void
+dmx_packet(DMXRecv *recv, guint l, guint8 *packet, AppContext *app)
+{
+  gchar buffer[30];;
+  guint i;
+  for (i = 0; i < l;i++) {
+    if (dmx_recv_channels_changed(recv, i, i + 1)) {
+      g_snprintf(buffer, sizeof(buffer), "dmx_channels/ch%d", i+1);
+      http_server_set_int(app->http_server, buffer, packet[i], NULL);
+    }
+  }
+}
 
 const GOptionEntry app_options[] = {
   {"config-file", 'c', 0, G_OPTION_ARG_FILENAME,
@@ -161,6 +173,7 @@ main(int argc, char *argv[])
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }
+  g_signal_connect(app_ctxt.dmx_recv, "new-packet", (GCallback)dmx_packet, &app_ctxt);
   app_ctxt.http_server = http_server_new();
   configure_http_server(&app_ctxt);
   if (!http_server_start(app_ctxt.http_server, &err)) {

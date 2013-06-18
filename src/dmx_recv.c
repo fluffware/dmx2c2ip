@@ -41,6 +41,7 @@ struct _DMXRecv
   GCond read_start_cond;
   GMutex read_mutex;
   GRWLock read_buffer_lock;
+  guint frame_count;
 };
 
 struct _DMXRecvClass
@@ -70,15 +71,19 @@ G_DEFINE_TYPE (DMXRecv, dmx_recv, G_TYPE_OBJECT)
 static void
 channel_changed(DMXRecv *recv, gint channel_value)
 {
+#if 0
   fprintf(stderr, "%d: %02x\n",channel_value>>8, channel_value & 0xff);
+#endif
 }
 static void
 new_packet(DMXRecv *recv, guint l, guint8 *data)
 {
+#if 0
   while(l-- > 0) {
     fprintf(stderr, " %02x",*data++);
   }
   fprintf(stderr, "\n");
+#endif
 }
 
 static gpointer read_thread(gpointer data);
@@ -177,7 +182,8 @@ dmx_recv_init (DMXRecv *self)
   self->read_main_loop = NULL;
   self->read_main_context = NULL;
   self->creator_main_context = g_main_context_ref_thread_default();
-  memset(self->change_bits, 0, MAX_CHANGE_BIT_WORDS/sizeof(guint32));
+  memset(self->change_bits, ~0, MAX_BUFFER/sizeof(guint8));
+  self->frame_count = 0;
 }
 
 static gboolean
@@ -190,17 +196,16 @@ send_packet_signal(gpointer fdata)
   g_signal_emit(recv, dmx_recv_signals[NEW_PACKET], 0,
 		recv->buffer_length[b],
 		recv->buffers[b]);
-  memset(recv->change_bits, 0, MAX_CHANGE_BIT_WORDS/sizeof(guint32));
+  memset(recv->change_bits, 0, MAX_BUFFER/sizeof(guint8));
   g_rw_lock_reader_unlock (&recv->read_buffer_lock);
   return FALSE;
 }
 
-/* Sets a bit for every data byte that has changed. Returns the number
-   of bits set. */
+/* Sets a bit for every data byte that has changed. Returns true if
+   there are changes. */
 static guint
 signal_changes(DMXRecv *recv)
 {
-  guint change_count = 0;
   guint pos = 0;
   guint rb = recv->recv_buffer;
   guint8 *new_data = &recv->buffers[rb][pos];
@@ -210,13 +215,15 @@ signal_changes(DMXRecv *recv)
   while(pos < new_length) {
     if (pos >= old_length || *new_data != *old_data) {
       recv->change_bits[pos/32] |= 1<<(pos % 32);
-      change_count++;
     }
     new_data++;
     old_data++;
     pos++;
   }
-  return change_count;
+  for(pos = 0; pos < MAX_CHANGE_BIT_WORDS; pos++) {
+    if (recv->change_bits[pos] != 0) return TRUE;
+  }
+  return FALSE;
 }
 
 /**
@@ -244,7 +251,7 @@ dmx_recv_channels_changed(DMXRecv *recv, guint from, guint to)
   if (to > recv->buffer_length[b]) to = recv->buffer_length[b];
   if (from >= to) return FALSE;
   pos = from / 32;
-  from &= 32;
+  from %= 32;
   end = to /32;
   to %= 32;
   if (pos == end) {
@@ -252,7 +259,7 @@ dmx_recv_channels_changed(DMXRecv *recv, guint from, guint to)
   } else {
     if (recv->change_bits[pos] & HIGH_MASK(from)) return TRUE;
     while(++pos < end) if (recv->change_bits[pos] != 0) return TRUE;
-    return recv->change_bits[pos] & LOW_MASK(to);
+    return recv->change_bits[end] & LOW_MASK(to);
   }
 }
 /* Decode received data and put it in the right buffer. Switch buffer on break.
@@ -273,8 +280,8 @@ handle_data(DMXRecv *recv, const uint8_t *data, gsize data_length)
 	/* If the signal handlers are busy just skip and wait for the next
 	   packet. */
 	if (g_rw_lock_writer_trylock (&recv->read_buffer_lock)) {
-	  if (signal_changes(recv) > 0) {
-	    recv->recv_buffer ^= 1;  /* Switch buffer */
+	  recv->recv_buffer ^= 1;  /* Switch buffer */
+	  if (recv->frame_count > 2 && signal_changes(recv)) {
 	    
 	    source = g_idle_source_new();
 	    g_object_ref(recv);
@@ -283,6 +290,7 @@ handle_data(DMXRecv *recv, const uint8_t *data, gsize data_length)
 	  }
 	  g_rw_lock_writer_unlock(&recv->read_buffer_lock);
 	}
+	recv->frame_count++;
 	recv->buffer_length[recv->recv_buffer] = 0;
 	
 
@@ -338,7 +346,7 @@ dispatch(GSource *source, GSourceFunc callback, gpointer user_data)
   uint8_t buffer[16];
   struct DMXSource *dmx_source = (struct DMXSource*)source;
   ssize_t r = read(dmx_source->pollfd.fd, buffer, sizeof(buffer));
-  g_debug("Dispatch");
+  /* g_debug("Dispatch"); */
   handle_data(dmx_source->recv, buffer, r);
   
   return TRUE;
