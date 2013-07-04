@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <glib-unix.h>
 #include "httpd.h"
+#include <c2ip_scan.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
 
@@ -22,6 +23,7 @@ struct AppContext
   int dmx_speed;
   DMXRecv *dmx_recv;
   HTTPServer *http_server;
+  C2IPScan *c2ip_scanner;
 };
   
 AppContext app_ctxt  = {
@@ -29,6 +31,7 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   250000,
+  NULL,
   NULL,
   NULL
 };
@@ -43,6 +46,7 @@ app_cleanup(AppContext* app)
 {
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
+  g_clear_object(&app->c2ip_scanner);
 
   g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
@@ -98,7 +102,22 @@ configure_http_server(AppContext *app)
   g_object_unref(builder);
 }
 
-
+gboolean
+setup_c2ip_scanner(AppContext *app, GError **err)
+{
+  const gchar *range_str = "127.0.0.1/32";
+  GInetAddressMask *range = g_inet_address_mask_new_from_string(range_str, err);
+  if (!range) {
+    return FALSE;
+  }
+  app->c2ip_scanner = c2ip_scan_new();
+  if (!c2ip_scan_start(app->c2ip_scanner, range, err)) {
+    g_object_unref(range);
+    return FALSE;
+  }
+  g_object_unref(range);
+  return TRUE;
+}
 const GOptionEntry app_options[] = {
   {"config-file", 'c', 0, G_OPTION_ARG_FILENAME,
    &app_ctxt.config_filename, "Configuration file", "FILE"},
@@ -165,6 +184,12 @@ main(int argc, char *argv[])
     g_printerr("Failed to setup HTTP server: %s\n", err->message);
     g_clear_object(&app_ctxt.http_server);
     g_clear_error(&err);
+  }
+  
+  if (!setup_c2ip_scanner(&app_ctxt, &err)) {
+    g_printerr("Failed to start C2IP scanner: %s\n", err->message);
+    app_cleanup(&app_ctxt);
+    return EXIT_FAILURE;
   }
   loop = g_main_loop_new(NULL, FALSE);
   g_unix_signal_add(SIGINT, sigint_handler, loop);
