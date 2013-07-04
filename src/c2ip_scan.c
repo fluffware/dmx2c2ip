@@ -110,7 +110,7 @@ get_property (GObject *object, guint property_id,
 }
 static void
 device_found(C2IPScan *scanner, guint type, const gchar *name,
-	      const GInetAddress *addr, guint port)
+	      GInetAddress *addr, guint port)
 {
 }
 
