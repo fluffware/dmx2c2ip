@@ -16,7 +16,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <json-glib/json-glib.h>
-#include <httpd_marshal.h>
 
 GQuark
 http_server_error_quark()
