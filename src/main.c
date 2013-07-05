@@ -4,6 +4,7 @@
 #include <glib-unix.h>
 #include "httpd.h"
 #include <c2ip_scan.h>
+#include <c2ip_connection_manager.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
 
@@ -24,6 +25,7 @@ struct AppContext
   DMXRecv *dmx_recv;
   HTTPServer *http_server;
   C2IPScan *c2ip_scanner;
+  C2IPConnectionManager *c2ip_connection_manager;
 };
   
 AppContext app_ctxt  = {
@@ -31,6 +33,7 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   250000,
+  NULL,
   NULL,
   NULL,
   NULL
@@ -44,9 +47,10 @@ app_init(AppContext *app)
 static void
 app_cleanup(AppContext* app)
 {
+  g_clear_object(&app->c2ip_scanner);
+  g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
-  g_clear_object(&app->c2ip_scanner);
 
   g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
@@ -128,7 +132,7 @@ device_found(C2IPScan *scanner,
   g_free(addr_str);
 }
 
-gboolean
+static gboolean
 setup_c2ip_scanner(AppContext *app, GError **err)
 {
   const gchar *range_str = "127.0.0.1/32";
@@ -144,6 +148,17 @@ setup_c2ip_scanner(AppContext *app, GError **err)
     return FALSE;
   }
   g_object_unref(range);
+  return TRUE;
+}
+
+static gboolean
+setup_c2ip(AppContext *app, GError **err)
+{
+  if (!setup_c2ip_scanner(app, err)) return FALSE;
+  app->c2ip_connection_manager = c2ip_connection_manager_new();
+  g_signal_connect_swapped(app->c2ip_scanner, "device-found",
+			   (GCallback)c2ip_connection_manager_add_device,
+			   app->c2ip_connection_manager);
   return TRUE;
 }
 
@@ -216,8 +231,8 @@ main(int argc, char *argv[])
     g_clear_error(&err);
   }
   
-  if (!setup_c2ip_scanner(&app_ctxt, &err)) {
-    g_printerr("Failed to start C2IP scanner: %s\n", err->message);
+  if (!setup_c2ip(&app_ctxt, &err)) {
+    g_printerr("Failed to set up C2IP: %s\n", err->message);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }

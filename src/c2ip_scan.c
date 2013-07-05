@@ -163,7 +163,6 @@ c2ip_scan_new(void)
 }
 
 
-#define C2IP_U16(b) ((((b)[0])<<8)|(b)[1])
 gboolean
 handle_packet(C2IPScan *scanner, guint packet_type, guint packet_length,
 	      const guint8 *buffer, GError **err)
