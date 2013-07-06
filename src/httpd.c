@@ -207,17 +207,17 @@ http_server_class_init (HTTPServerClass *klass)
   server_class->value_changed = value_changed;
   properties[0] = NULL;
   properties[PROP_USER]
-    =  g_param_spec_string("user", "user", "User for athentication",
+    =  g_param_spec_string("user", "User", "User for athentication",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   properties[PROP_PASSWORD]
-    =  g_param_spec_string("password", "pass", "Password for athentication",
+    =  g_param_spec_string("password", "Password", "Password for athentication",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   properties[PROP_PORT]
-    = g_param_spec_uint("http-port", "port", "HTTP port number",
+    = g_param_spec_uint("http-port", "HTTP port", "HTTP port number",
 			1, 65535, 8080,
 			G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   properties[PROP_HTTP_ROOT]
-    =  g_param_spec_string("http-root", "root", "Root directory",
+    =  g_param_spec_string("http-root", "HTTP root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
   http_server_signals[VALUE_CHANGED] =
