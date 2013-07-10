@@ -83,7 +83,6 @@ void value_changed_cb(HTTPServer *server, GQuark path, const GValue *value,
 static void
 configure_http_server(AppContext *app)
 {
-  GQuark id;
   GError *err = NULL;
   guint port;
   port = g_key_file_get_integer(app_ctxt.config_file, "HTTP", "Port", &err);
@@ -99,7 +98,7 @@ configure_http_server(AppContext *app)
   configure_string_property(app->http_server, "http-root",
 			    app_ctxt.config_file, "HTTP", "Root");
   
-  id = http_server_set_int(app->http_server, "foo", 78, NULL);
+  http_server_set_int(app->http_server, "foo", 78, NULL);
   g_signal_connect(app->http_server, "value-changed", (GCallback)value_changed_cb, app);
   http_server_set_double(app->http_server, "bar/0", 3.1415, NULL);
   http_server_set_double(app->http_server, "bar/1", -1.41, NULL);

@@ -4,7 +4,7 @@ AM_INIT_AUTOMAKE
 AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 AC_SYS_LARGEFILE
-AM_PATH_GLIB_2_0(2.30.0,,, [gobject])
+AM_PATH_GLIB_2_0(2.30.0,,, [gobject, gio])
 # Check for microhttpd
 MICROHTTPD_CFLAGS=""
 AC_CHECK_HEADERS([microhttpd.h],[MICROHTTPD_CFLAGS=""])

@@ -20,8 +20,42 @@ typedef struct _C2IPConnection C2IPConnection;
 typedef struct _C2IPConnectionClass C2IPConnectionClass;
 
 
-C2IPConnection *
-c2ip_connection_new(void);
+GType
+c2ip_connection_get_type(void);
 
+C2IPConnection *
+c2ip_connection_new(GInetSocketAddress *addr);
+
+gboolean
+c2ip_connection_send_raw_packet(C2IPConnection *conn,
+				const guint8 *packet, gsize length,
+				GError **err);
+gboolean
+c2ip_connection_send_ping(C2IPConnection *conn, GError **err);
+
+gboolean
+c2ip_connection_send_value_request(C2IPConnection *conn, guint16 id,
+				   GError **err);
+
+gboolean
+c2ip_connection_send_value_request_all(C2IPConnection *conn, GError **err);
+
+gboolean
+c2ip_connection_send_value_change(C2IPConnection *conn, guint16 id,
+				  guint8 type,
+				  guint8 value_length, const guint8 *value,
+				  GError **err);
+
+
+gboolean
+c2ip_connection_send_option_request(C2IPConnection *conn, guint16 id,
+				    GError **err);
+
+gboolean
+c2ip_connection_send_info_request(C2IPConnection *conn, guint16 id,
+				  GError **err);
+
+void
+c2ip_connection_close(C2IPConnection *conn);
 
 #endif /* __C2IP_CONNECTION_H__D1PF1H80VV__ */

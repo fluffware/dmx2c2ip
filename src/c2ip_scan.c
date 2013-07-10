@@ -22,6 +22,8 @@ enum
 {
   PROP_0 = 0,
   PROP_PORT,
+  PROP_SCAN_INTERVAL,
+  PROP_FIRST_SCAN_INTERVAL,
   N_PROPERTIES
 };
 
@@ -33,6 +35,9 @@ struct _C2IPScan
   GSocket *socket;
   GSource *socket_source;
   guint timeout_id;
+  guint scan_interval;
+  guint first_scan_interval;
+  guint current_scan_interval;
 };
 
 struct _C2IPScanClass
@@ -52,19 +57,7 @@ static void
 dispose(GObject *gobj)
 {
   C2IPScan *scanner = C2IP_SCAN(gobj);
-  if (scanner->timeout_id > 0) {
-    g_source_remove(scanner->timeout_id);
-    scanner->timeout_id = 0;
-  }
-  if (scanner->socket_source) {
-    g_source_destroy(scanner->socket_source);
-    g_source_unref(scanner->socket_source);
-    scanner->socket_source = NULL;
-  }
-  if (scanner->socket) {
-    g_socket_close(scanner->socket, NULL);
-    g_clear_object(&scanner->socket);
-  }
+  c2ip_scan_stop(scanner);
   g_clear_object(&scanner->addr_range);
   G_OBJECT_CLASS(c2ip_scan_parent_class)->dispose(gobj);
 }
@@ -86,6 +79,12 @@ set_property (GObject *object, guint property_id,
     case PROP_PORT:
       scanner->port = g_value_get_uint(value);
       break;
+    case PROP_SCAN_INTERVAL:
+      scanner->scan_interval = g_value_get_uint(value);
+      break;
+    case PROP_FIRST_SCAN_INTERVAL:
+      scanner->first_scan_interval = g_value_get_uint(value);
+      break;
     default:
        /* We don't have any other property... */
        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -102,6 +101,13 @@ get_property (GObject *object, guint property_id,
   case PROP_PORT:
     g_value_set_uint(value, scanner->port);
     break;
+  case PROP_SCAN_INTERVAL:
+    g_value_set_uint(value, scanner->scan_interval);
+    break;
+  case PROP_FIRST_SCAN_INTERVAL:
+    g_value_set_uint(value, scanner->first_scan_interval);
+    break;
+    
   default:
     /* We don't have any other property... */
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -129,9 +135,22 @@ c2ip_scan_class_init (C2IPScanClass *klass)
 
   properties[0] = NULL;
   properties[PROP_PORT]
-    = g_param_spec_uint("name-port", "port", "C2IP name service port",
+    = g_param_spec_uint("name-port", "Port", "C2IP name service port",
 			1, 65535, 1500,
 			G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+   properties[PROP_SCAN_INTERVAL]
+    = g_param_spec_uint("scan-interval", "Scan interval",
+			"Interval in milliseconds between scanning packets, "
+			"except for first scan. Set to 0 to disable scanning.",
+			0, 65535, 1000,
+			G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+    properties[PROP_FIRST_SCAN_INTERVAL]
+      = g_param_spec_uint("first-scan-interval", "First scan interval",
+			  "Interval in milliseconds between scanning packets "
+			  "for first scan",
+			  10, 65535, 100,
+			  G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+   
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
   c2ip_scan_signals[DEVICE_FOUND] =
     g_signal_new("device-found",
@@ -151,6 +170,8 @@ c2ip_scan_init(C2IPScan *scanner)
   scanner->socket = NULL;
   scanner->socket_source = NULL;
   scanner->timeout_id = 0;
+  scanner->scan_interval = 1000;
+  scanner->first_scan_interval = 100;
 }
 
 
@@ -198,7 +219,6 @@ gboolean recv_callback(GSocket *socket, GIOCondition condition,
     {
       gssize size;
       GError *err = NULL;
-      g_debug("Received data");
       size = g_socket_receive_from(scanner->socket, NULL,
 				   (gchar*)buffer, sizeof(buffer), NULL,
 				   &err);
@@ -237,7 +257,6 @@ timeout_callback(gpointer user_data)
   GError *err = NULL;
   static const gchar request[] = {0x00,0x08, 0x00, 0x03, 0x01, 0x00, 0x00};
   C2IPScan *scanner = user_data;
-  g_debug("Timeout");
   ip_addr = g_inet_address_mask_get_address (scanner->addr_range);
   socket_addr = g_inet_socket_address_new(ip_addr, scanner->port);
   
@@ -248,23 +267,72 @@ timeout_callback(gpointer user_data)
     g_clear_error(&err);
   }
   g_object_unref(socket_addr);
-  return TRUE;
+  if (scanner->current_scan_interval == scanner->scan_interval) return TRUE;
+  if (scanner->scan_interval > 0) {
+    scanner->timeout_id = g_timeout_add(scanner->scan_interval,
+					timeout_callback, scanner);
+  } else {
+    scanner->timeout_id = 0;
+  }
+  scanner->current_scan_interval = scanner->scan_interval;
+  return FALSE;
 }
+
+void
+c2ip_scan_stop(C2IPScan *scanner)
+{
+   if (scanner->timeout_id > 0) {
+    g_source_remove(scanner->timeout_id);
+    scanner->timeout_id = 0;
+  }
+  if (scanner->socket_source) {
+    g_source_destroy(scanner->socket_source);
+    g_source_unref(scanner->socket_source);
+    scanner->socket_source = NULL;
+  }
+  if (scanner->socket) {
+    g_socket_close(scanner->socket, NULL);
+    g_clear_object(&scanner->socket);
+  }
+}
+
+/**
+ * Start (or restart) scanning for devices in the given range.
+ *
+ * @param scanner C2IPScan object
+ * @param range Address range to scan.
+ * May be NULL if already set by a previous call.
+ *
+ * @returns TRUE if the scanning started successfully
+ */
 
 gboolean
 c2ip_scan_start(C2IPScan *scanner, GInetAddressMask *range, GError **err)
 {
-  scanner->addr_range = range;
-  g_object_ref(range);
-  scanner->socket = g_socket_new(g_inet_address_mask_get_family(range),
-				 G_SOCKET_TYPE_DATAGRAM,G_SOCKET_PROTOCOL_UDP,
-				 err);
+  if (range) {
+    g_clear_object(&scanner->addr_range);
+    scanner->addr_range = range;
+    g_object_ref(range);
+  }
+  if (!scanner->addr_range) {
+    g_set_error(err, C2IP_SCAN_ERROR, C2IP_SCAN_ERROR_NO_RANGE,
+		"No scanning range has been set.");
+    return FALSE;
+  }
+  c2ip_scan_stop(scanner);
+  scanner->socket =
+    g_socket_new(g_inet_address_mask_get_family(scanner->addr_range),
+		 G_SOCKET_TYPE_DATAGRAM,G_SOCKET_PROTOCOL_UDP,
+		 err);
   if (!scanner->socket) return FALSE;
   scanner->socket_source =
     g_socket_create_source(scanner->socket, G_IO_IN, NULL);
   g_source_set_callback(scanner->socket_source, (GSourceFunc)recv_callback,
 			scanner, NULL);
   g_source_attach(scanner->socket_source, NULL);
-  scanner->timeout_id = g_timeout_add(5000, timeout_callback, scanner);
+  scanner->timeout_id = g_timeout_add(scanner->first_scan_interval,
+				      timeout_callback, scanner);
+  scanner->current_scan_interval = scanner->first_scan_interval;
   return TRUE;
 }
+

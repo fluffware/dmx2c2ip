@@ -1,0 +1,183 @@
+Name server protocol
+Uses UDP, port 1500
+
+Types 
+U8	Unsigned 8 bit integer
+U12	Unsigned big endian 12 bit integer, just a limited U16
+U16	Unsigned big endian 16 bit integer
+STRING	One byte length followed by characters
+VTYPE	Value type
+	0	U8
+	1	Enumeration
+	2	Boolean
+	4	STRING
+	5	S16
+	0x80	U12
+	0x85	16bit floating point
+
+Request 
+Length 	Type	Value		Description
+2	U16	08		Packet type
+2	U16	03		Data length (rest of packet)
+1	U8	01		Request
+2		0000
+
+Reply
+Length	Type	Value		Description
+2	U16	08		Packet type
+2	U16			Data length (rest of packet)
+1	U8	02		Reply
+1	U8			Device type  (1: base station, 2: camera head, 4:OCP)
+s	STRING			Name string
+4	IPADDR			IP-address
+2	U16			Port
+
+C2IP redirection protocol
+Uses TCP
+
+Device setup
+Request
+Byte	Type	Value		Description
+2	U16	01		Packet type
+2	U16	03		Data length (rest of packet)
+1	U8	01		Request
+2		0004		
+
+Reply
+Byte	Type	Value		Description
+2	U16	02		Packet type
+2	U16	04		Data length (rest of packet)
+1	U8	02		Reply
+1	U8			Status (0: off-line, 1:on-line)
+2	U16			Port
+
+	
+Main protocol
+Uses TCP
+
+Authentication
+Request
+Byte	Type	Value		Description
+2	U16	01		Packet type
+2	U16			Data length (rest of packet)
+1	U8	03		Request
+2		00 04
+s	STRING			Client name
+3		05 02 01
+
+Reply
+Byte	Type	Value		Description
+2	U16	01		Packet type
+2	U16	03		Data length (rest of packet)
+1	U8	04		Reply
+2		02 01
+
+Ping
+Request
+Byte	Type	Value		Description
+2	U16	01		Packet type
+2	U16	01		Data length (rest of packet)
+1	U8	06		Request
+
+Reply
+Byte	Type	Value		Description
+2	U16	01		Packet type
+2	U16	01		Data length (rest of packet)
+1	U8	07		Reply
+
+
+
+Function value indication
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	03		Indication
+2	U16			NS_ID
+1	U8			Flags,1:Has extra info, 2:Write disabled, 4:Read disabled, 8: Unit
+1	VTYPE			Value type, Flags 0x40:Relative change
+1	U8			Value length
+v				Value
+
+Function value request all
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16	01		Data length (rest of packet)
+1	U8	00		Request
+
+Function value request
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16	03		Data length (rest of packet)
+1	U8	04		Request
+2  	U16			NS_ID
+
+Function value reply
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	05		Reply
+2	U16			NS_ID
+1	U8			Flags,1:Has extra info, 2:Write disabled, 4:Read disabled, 8: Unit
+1	VTYPE			Value type
+1	U8			Value length
+v	
+			Value
+Function change value
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16	01		Data length (rest of packet)
+1	U8	02		Request
+2  	U16			NS_ID
+1		00
+1	U8			Valye type Flags 0x40:relative
+1	U8			Value length
+v				Value
+
+Function value all done reply
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	01		Reply
+
+Function option info request (for enum and bool)
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	06		Request
+2  	U16			NS_ID
+3		02 01 00	Unknown
+
+Function option info reply
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	07		Reply
+2  	U16			NS_ID
+1	U8	03		Option info
+1		06		Unknown
+1	U8			Number of following bytes
+1	U8			Number of  options
+{
+1	U8			Enum value
+s	STRING			String value
+} repeats for each option
+
+
+Function extra info request
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	06		Request
+2  	U16			NS_ID
+3		05 00 00	Unknown
+
+Function extra info reply
+Byte	Type	Value		Description
+2	U16	04		Packet type
+2	U16			Data length (rest of packet)
+1	U8	07		Reply
+2  	U16			NS_ID
+1	U8	06		Etra info
+5				Unknown
+s	STRING			Unit
+

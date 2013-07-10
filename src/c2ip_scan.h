@@ -6,7 +6,8 @@
 
 #define C2IP_SCAN_ERROR (c2ip_scan_error_quark())
 enum {
-  C2IP_SCAN_ERROR_INVALID_REPLY = 1
+  C2IP_SCAN_ERROR_INVALID_REPLY = 1,
+  C2IP_SCAN_ERROR_NO_RANGE
 };
 
 #define C2IP_SCAN_TYPE                  (c2ip_scan_get_type ())
@@ -26,5 +27,7 @@ c2ip_scan_new(void);
 gboolean
 c2ip_scan_start(C2IPScan *scanner, GInetAddressMask *range, GError **err);
 
+void
+c2ip_scan_stop(C2IPScan *scanner);
 
 #endif /* __C2IP_SCAN_H__GYZ861LCQA__ */
