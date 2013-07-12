@@ -55,7 +55,7 @@ struct _C2IPConnectionClass
   /* Signals */
   void (*connection_closed)(C2IPConnection *conn);
   void (*connected)(C2IPConnection *conn);
-  void (*received_packet)(C2IPConnection *conn, guint length, guint8 *packet);
+  void (*received_packet)(C2IPConnection *conn, guint length, const guint8 *packet);
 };
 
 G_DEFINE_TYPE (C2IPConnection, c2ip_connection, G_TYPE_OBJECT)
@@ -230,6 +230,11 @@ send_request(C2IPConnection *conn, const guint8 *request, gsize length,
 {
   gsize written;
   GOutputStream *out;
+  if (!conn->connection) {
+    g_set_error(err, C2IP_CONNECTION_ERROR, C2IP_CONNECTION_ERROR_NO_CONNECTION,
+		"No connection");
+    return FALSE;
+  }
   out = g_io_stream_get_output_stream(G_IO_STREAM(conn->connection));
   if (!g_output_stream_write_all(out, request,length, &written,
 				 conn->cancellable, err)) {
@@ -286,12 +291,15 @@ handle_reply(C2IPConnection *conn, const guint8 *reply, gsize plen)
 {
   guint type = C2IP_U16(&reply[0]);
   guint dlen = C2IP_U16(&reply[2]);
-  if (conn->ping_reply && type == 0x01 && dlen == 1 && reply[4] == 0x06) {
+  if (conn->ping_reply && type == C2IP_PKT_TYPE_SETUP && dlen == 1 && reply[4] == 0x06) {
     GError *err = NULL;
     if (!send_ping_reply(conn, &err)) {
       g_warning("Failed to send automatic ping reply: %s", err->message);
       g_clear_error(&err);
     }
+  } else if (conn->ping_interval > 0 && type == C2IP_PKT_TYPE_SETUP && dlen == 3 && reply[4] == C2IP_REPLY_AUTH) {
+    g_signal_emit(conn, c2ip_connection_signals[CONNECTED], 0);  
+    
   } else if (conn->ping_interval > 0 && type == 0x01 && dlen == 1 && reply[4] == 0x07) {
     /* Ignore ping replies if the requests are sent by this object */
   } else {
@@ -352,7 +360,7 @@ read_reply(C2IPConnection *conn)
 static gboolean
 ping_timeout_callback(gpointer user_data)
 {
-  GError *err;
+  GError *err = NULL;
   C2IPConnection *conn = user_data;
   if (!send_ping(conn, &err)) {
     g_warning("Failed to send ping: %s", err->message);
@@ -387,7 +395,6 @@ connect_callback(GObject *source_object, GAsyncResult *res, gpointer user_data)
     return;
   }
   start_ping_interval(conn);
-  g_signal_emit(conn, c2ip_connection_signals[CONNECTED], 0);  
   if (!send_authentication(conn, conn->client_name, &err)) {
     g_warning("Failed to send authentication: %s", err->message);
     g_clear_error(&err);
@@ -396,6 +403,7 @@ connect_callback(GObject *source_object, GAsyncResult *res, gpointer user_data)
   }
   read_reply(conn);
 }
+
 C2IPConnection *
 c2ip_connection_new(GInetSocketAddress *addr)
 {
@@ -404,6 +412,12 @@ c2ip_connection_new(GInetSocketAddress *addr)
   g_socket_client_connect_async(conn->client, G_SOCKET_CONNECTABLE(addr),
 				conn->cancellable, connect_callback, conn);
   return conn;
+}
+
+gboolean
+c2ip_connection_connected(C2IPConnection *conn)
+{
+  return conn->connection != NULL;
 }
 
 gboolean

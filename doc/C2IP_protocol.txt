@@ -177,7 +177,7 @@ Byte	Type	Value		Description
 2	U16			Data length (rest of packet)
 1	U8	07		Reply
 2  	U16			NS_ID
-1	U8	06		Etra info
+1	U8	06		Extra info
 5				Unknown
 s	STRING			Unit
 

@@ -16,6 +16,14 @@ c2ip_string_map(const C2IPStringMap *map, unsigned int length, unsigned int id)
   return 0;
 }
 
+const char *
+c2ip_string_map_default(const C2IPStringMap *map, unsigned int length,
+			unsigned int id, const char *default_str)
+{
+  const char *str = c2ip_string_map(map, length, id);
+  return str ? str : default_str;
+}
+
 const C2IPStringMap c2ip_funtion_name_map[] = {
   {513,"Gain Red"},
   {514,"Gain Green"},

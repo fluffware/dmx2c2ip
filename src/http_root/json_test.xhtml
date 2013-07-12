@@ -9,7 +9,7 @@
     <script type="application/javascript" src="jquery_min.js">
     </script>
   </head>
-  <body onload="upd = new FieldUpdate('values'); upd.start()" onunload="upd.stop()">
+  <body onload="upd = new FieldUpdate('values',$('form')); upd.start()" onunload="upd.stop()">
     <h1>JSON test</h1>
     <form action="#">
       <p>

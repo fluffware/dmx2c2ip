@@ -35,11 +35,15 @@ function postError(req,status,error)
     alert("Post request failed ("+status+","+error+")");
 }
 
-function FieldUpdate(url)
+function FieldUpdate(url_arg, top_arg)
 {
     var values;
-    this.url = url;
+    var top = top_arg;
+    if (this.top == null) this.top = $(this);
+    var url = url_arg;
     this.tout = null;
+    var pathcheck = /^[0-9a-zA-Z_]+(\/[0-9a-zA-Z_]+)*$/;
+    
     this.start = function()
     {
 	if (this.tout == null) {
@@ -55,46 +59,10 @@ function FieldUpdate(url)
 	    clearTimeout(tout);
 	}
     }
-    var pathcheck = /^[0-9a-zA-Z_]+(\/[0-9a-zA-Z_]+)*$/;
-    var inputs = $("input[path]");
-    inputs.each(function() {
-	var path = this.getAttribute("path");
-	if (!pathcheck.test(path)) {
-	    alert("Invalid path '"+path+"'");
-	}
-	var parts = path.split("/");
-	this.getValue = "values."+parts.join('.');
-    });
-    inputs.keypress(function(event) {
-	if (event.keyCode == 27) { // ESC
-	    this.editing = false;
-	} else if (event.keyCode == 13) { // Return
-	    if (this.editing) {
-		this.editing = false; 
-		var v = null;
-		var path = this.getAttribute("path");
-		var type = typeof(eval(this.getValue));
-		console.log("type="+type);
-		if (type=="string") {
-		    v = this.value;
-		} else if (type=="number") {
-		    v = parseFloat(this.value);
-		}
-		if (v != null) {
-		    console.log("Sending "+JSON.stringify(v)+" to "+"/values/"+path);
-		    jQuery.ajax({type:"POST", url:"/values/"+path, dataType:"json", contentType:"application/json", data:JSON.stringify(v)});
-		}
-	    }
-	} else {
-	    this.editing = true;
-	}
-    });
-    inputs.blur(function() {
-	this.editing = false;
-    });
+   
     function requestUpdate(upd) 
     {
-	jQuery.getJSON(upd.url, handleValueReply).error(function() {requestError(upd)}).complete(function() {requestUpdateDone(upd)});
+	jQuery.getJSON(url, handleValueReply).error(function() {requestError(upd)}).complete(function() {requestUpdateDone(upd)});
     }
 
     function requestUpdateDone(upd) 
@@ -102,16 +70,62 @@ function FieldUpdate(url)
 	upd.tout = setTimeout(function() {requestUpdate(upd)}, 1000);
     }
     
+    function prepare_input_element(element)
+    {
+	
+	var path = element.getAttribute("path");
+	if (!pathcheck.test(path)) {
+	    alert("Invalid path '"+path+"'");
+	}
+	var parts = path.split("/");
+	element.getValue = "values."+parts.join('.');
+	console.log("Path "+element.getValue)
+	
+	$(element).keypress(
+	    function(event) {
+		if (event.keyCode == 27) { // ESC
+		    this.editing = false;
+		} else if (event.keyCode == 13) { // Return
+		    if (this.editing) {
+			this.editing = false; 
+			var v = null;
+			var path = this.getAttribute("path");
+			var type = typeof(eval(this.getValue));
+			console.log("type="+type);
+			if (type=="string") {
+			    v = this.value;
+			} else if (type=="number") {
+			    v = parseFloat(this.value);
+		    }
+			if (v != null) {
+			    console.log("Sending "+JSON.stringify(v)+" to "+url+"/"+path);
+			    jQuery.ajax({type:"POST", url:url+"/"+path, dataType:"json", contentType:"application/json", data:JSON.stringify(v)});
+			}
+		    }
+		} else {
+		    this.editing = true;
+		}
+	    });
+	element.blur(function() {
+	    this.editing = false;
+	});
+    }
     function handleValueReply(data,status,req)
     {
 	values = data;
-	$("input[path]").each(function(index,element) 
-				   {
-				       if (!element.editing) {
-					   console.log(element.getValue);
-					   element.value = eval(element.getValue);
-				       }
-				   });
+	top.find("input[path]")
+	    .each(function(index,element) 
+		  {
+		      if (!element.editing) {
+			  if (element.getValue == null) {
+			      prepare_input_element(element);
+			  }
+			  try {
+			      //console.log(element.getValue);
+			      element.value = eval(element.getValue);
+			  } catch(e) {}
+		      }
+		  });
     }
 
     function requestError(req,status,error)

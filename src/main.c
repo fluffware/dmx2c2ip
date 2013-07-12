@@ -3,8 +3,11 @@
 #include <stdlib.h>
 #include <glib-unix.h>
 #include "httpd.h"
+#include <c2ip.h>
+#include <c2ip_strings.h>
 #include <c2ip_scan.h>
 #include <c2ip_connection_manager.h>
+#include <c2ip_connection_values.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
 
@@ -26,6 +29,7 @@ struct AppContext
   HTTPServer *http_server;
   C2IPScan *c2ip_scanner;
   C2IPConnectionManager *c2ip_connection_manager;
+  GSList *values;
 };
   
 AppContext app_ctxt  = {
@@ -33,6 +37,7 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   250000,
+  NULL,
   NULL,
   NULL,
   NULL,
@@ -51,7 +56,8 @@ app_cleanup(AppContext* app)
   g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
-
+  g_slist_free_full(app->values,g_object_unref);
+  app->values = NULL;
   g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
   g_free(app->dmx_device);
@@ -150,14 +156,200 @@ setup_c2ip_scanner(AppContext *app, GError **err)
   return TRUE;
 }
 
+static void
+connection_closed(C2IPConnectionValues *values, AppContext *app)
+{
+  app->values = g_slist_remove (app->values, values);
+  g_object_unref(values);
+  g_debug("Connection closed");
+}
+
+static gboolean
+print_value(C2IPValue *value, gpointer user_data)
+{
+  gchar *str;
+  C2IPDevice *dev = c2ip_value_get_device(value);
+  switch(c2ip_device_get_device_type(dev)) {
+  case C2IP_DEVICE_CAMERA_HEAD:
+    fputs("Camera ",stdout);
+    break;
+  case C2IP_DEVICE_BASE_STATION:
+    fputs("Base ", stdout);
+    break;
+  case C2IP_DEVICE_OCP:
+    fputs("OCP ", stdout);
+    break;
+  }
+  
+  fprintf(stdout, "%s \"%s\" ", c2ip_device_get_device_name(dev),
+	  c2ip_string_map_default(c2ip_funtion_name_map,
+				  c2ip_funtion_name_map_length,
+				  c2ip_value_get_id(value),
+				  "?"));
+  str = c2ip_value_to_string(value);
+  fputs(str,stdout);
+  fputc('\n', stdout);
+  fflush(stdout);
+  g_free(str);
+  return FALSE;
+}
+
+static void
+append_device_path(GString *str, C2IPDevice *dev)
+{
+  g_string_append(str, "id");
+  g_string_append(str,  c2ip_device_get_device_name(dev));
+  g_string_append_c(str, '/');
+  switch(c2ip_device_get_device_type(dev)) {
+  case C2IP_DEVICE_BASE_STATION:
+    g_string_append(str, "base");
+    break;
+  case C2IP_DEVICE_CAMERA_HEAD:
+    g_string_append(str, "camera");
+    break;
+  case C2IP_DEVICE_OCP:
+    g_string_append(str, "OCP");
+    break;
+  default:
+    g_string_append(str, "unknown");
+    break;
+  }
+}
+
+struct ExportOptions
+{
+  GString *path;
+  gsize prefix_len;
+  HTTPServer *server;
+  C2IPValue *value;
+};
+
+static gboolean
+export_option(guint n, const gchar *name,
+	      gpointer user_data)
+{
+  struct ExportOptions *export = user_data;
+  g_string_append_printf(export->path,"%d",n);
+  g_debug("%s %d = %s",export->path->str, n, name);
+  http_server_set_string(export->server, export->path->str,
+			 name, NULL);
+  g_string_truncate( export->path, export->prefix_len);
+  return FALSE;
+}
+
+static void
+export_options(C2IPValue *value, GString *path, AppContext *app)
+{
+  gssize prefix_len = path->len;
+  struct ExportOptions export;
+  g_string_append(path, "options/");
+  export.prefix_len = path->len;
+  export.path = path;
+  export.server = app->http_server;
+  export.value = value;
+  c2ip_value_options_foreach(value, export_option, &export);
+  g_string_truncate(path, prefix_len);
+}
+
+/* Export a value too the world through the web server */
+static gboolean
+export_value(C2IPValue *value, gpointer user_data)
+{
+  gsize prefix_len;
+  AppContext *app = user_data;
+  GString *str = g_string_new("functions/values/");
+  C2IPDevice *dev = c2ip_value_get_device(value);
+  append_device_path(str, dev);
+  g_string_append_printf(str, "/id%d", c2ip_value_get_id(value));
+  g_debug("Inserting at path %s", str->str);
+  switch( c2ip_value_get_value_type(value)) {
+  case C2IP_TYPE_U8:
+  case C2IP_TYPE_U12:
+  case C2IP_TYPE_S16:
+  case C2IP_TYPE_ENUM:
+  case C2IP_TYPE_BOOL:
+    http_server_set_int(app->http_server, str->str,
+			g_value_get_int(c2ip_value_get_value(value)) , NULL);
+    break;
+  case C2IP_TYPE_STRING:
+    http_server_set_string(app->http_server, str->str,
+			   g_value_get_string(c2ip_value_get_value(value)) ,
+			   NULL);
+    break;
+  case C2IP_TYPE_FLOAT16:
+    http_server_set_double(app->http_server, str->str,
+			   g_value_get_float(c2ip_value_get_value(value)) ,
+			   NULL);
+    break;
+  }
+  g_string_assign(str, "functions/attributes/");
+  append_device_path(str, dev);
+  g_string_append_printf(str, "/id%d/", c2ip_value_get_id(value));
+  prefix_len = str->len;
+  g_string_append(str, "type");
+  http_server_set_string(app->http_server, str->str,
+			 c2ip_value_get_value_type_string(value), NULL);
+  g_string_truncate(str, prefix_len);
+  g_string_append(str, "name");
+  http_server_set_string(app->http_server, str->str,
+			 c2ip_value_get_name(value), NULL);
+  g_string_truncate(str, prefix_len);
+  
+  if (c2ip_value_get_unit(value)) {
+    g_string_append(str, "unit");
+    http_server_set_string(app->http_server, str->str,
+			   c2ip_value_get_unit(value), NULL);
+    g_string_truncate(str, prefix_len);
+  }
+  export_options(value, str, app);
+  g_string_free(str, TRUE);
+
+  
+  return FALSE;
+}
+
+static void
+values_ready(C2IPConnectionValues *values, AppContext *app)
+{
+  c2ip_connection_values_foreach(values, export_value, app);
+}
+
+static void
+value_changed(C2IPConnectionValues *values, C2IPValue *value, AppContext *app)
+{
+  export_value(value, app);
+}
+
+
+static void
+new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_type, const gchar *name, AppContext *app)
+{
+  C2IPDevice *dev;
+  C2IPConnectionValues *values = c2ip_connection_values_new(conn);
+  dev = c2ip_connection_values_get_device(values);
+  c2ip_device_set_device_type(dev, device_type);
+  c2ip_device_set_device_name(dev, name);
+  app->values = g_slist_prepend(app->values, values);
+  g_signal_connect(values, "connection-closed",
+		   (GCallback)connection_closed, app);
+   g_signal_connect(values, "values-ready",
+		   (GCallback)values_ready, app);
+   g_signal_connect(values, "value-changed",
+		   (GCallback)value_changed, app);
+  
+  g_debug("New connection");
+}
+
 static gboolean
 setup_c2ip(AppContext *app, GError **err)
 {
   if (!setup_c2ip_scanner(app, err)) return FALSE;
   app->c2ip_connection_manager = c2ip_connection_manager_new();
-  g_signal_connect_swapped(app->c2ip_scanner, "device-found",
-			   (GCallback)c2ip_connection_manager_add_device,
-			   app->c2ip_connection_manager);
+  g_signal_connect_object(app->c2ip_scanner, "device-found",
+			  (GCallback)c2ip_connection_manager_add_device,
+			  app->c2ip_connection_manager, G_CONNECT_SWAPPED);
+  g_signal_connect(app->c2ip_connection_manager, "new-connection",
+		   (GCallback)new_connection, app);
   return TRUE;
 }
 

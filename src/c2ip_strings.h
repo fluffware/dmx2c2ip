@@ -14,4 +14,11 @@ extern const C2IPStringMap c2ip_funtion_name_map[];
 
 const char *
 c2ip_string_map(const C2IPStringMap *map, unsigned int length, unsigned int id);
+
+const char *
+c2ip_string_map_default(const C2IPStringMap *map, unsigned int length,
+			unsigned int id, const char *default_str);
+
+
+
 #endif /* __C2IP_STRINGS_H__L1IPQZCXE6__ */

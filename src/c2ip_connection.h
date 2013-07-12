@@ -6,7 +6,8 @@
 
 #define C2IP_CONNECTION_ERROR (c2ip_connection_error_quark())
 enum {
-  C2IP_CONNECTION_ERROR_INVALID_REPLY = 1
+  C2IP_CONNECTION_ERROR_INVALID_REPLY = 1,
+  C2IP_CONNECTION_ERROR_NO_CONNECTION
 };
 
 #define C2IP_CONNECTION_TYPE                  (c2ip_connection_get_type ())
@@ -57,5 +58,11 @@ c2ip_connection_send_info_request(C2IPConnection *conn, guint16 id,
 
 void
 c2ip_connection_close(C2IPConnection *conn);
+
+gboolean
+c2ip_connection_connected(C2IPConnection *conn);
+
+
+
 
 #endif /* __C2IP_CONNECTION_H__D1PF1H80VV__ */
