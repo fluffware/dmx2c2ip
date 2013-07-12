@@ -78,7 +78,10 @@ function FieldUpdate(url_arg, top_arg)
 	    alert("Invalid path '"+path+"'");
 	}
 	var parts = path.split("/");
-	element.getValue = "values."+parts.join('.');
+	element.getValue = "values";
+	for (p in parts) {
+	    element.getValue += '["'+parts[p]+'"]';
+	}
 	console.log("Path "+element.getValue)
 	
 	$(element).keypress(
@@ -121,7 +124,7 @@ function FieldUpdate(url_arg, top_arg)
 			      prepare_input_element(element);
 			  }
 			  try {
-			      //console.log(element.getValue);
+			      console.log(element.getValue);
 			      element.value = eval(element.getValue);
 			  } catch(e) {}
 		      }

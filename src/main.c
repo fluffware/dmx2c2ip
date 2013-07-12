@@ -205,7 +205,6 @@ print_value(C2IPValue *value, gpointer user_data)
 static void
 append_device_path(GString *str, C2IPDevice *dev)
 {
-  g_string_append(str, "id");
   g_string_append(str,  c2ip_device_get_device_name(dev));
   g_string_append_c(str, '/');
   switch(c2ip_device_get_device_type(dev)) {
@@ -268,7 +267,7 @@ export_value(C2IPValue *value, gpointer user_data)
   GString *str = g_string_new("functions/values/");
   C2IPDevice *dev = c2ip_value_get_device(value);
   append_device_path(str, dev);
-  g_string_append_printf(str, "/id%d", c2ip_value_get_id(value));
+  g_string_append_printf(str, "/%d", c2ip_value_get_id(value));
   g_debug("Inserting at path %s", str->str);
   switch( c2ip_value_get_value_type(value)) {
   case C2IP_TYPE_U8:
@@ -292,7 +291,7 @@ export_value(C2IPValue *value, gpointer user_data)
   }
   g_string_assign(str, "functions/attributes/");
   append_device_path(str, dev);
-  g_string_append_printf(str, "/id%d/", c2ip_value_get_id(value));
+  g_string_append_printf(str, "/%d/", c2ip_value_get_id(value));
   prefix_len = str->len;
   g_string_append(str, "type");
   http_server_set_string(app->http_server, str->str,
