@@ -57,8 +57,7 @@ struct _C2IPConnectionManagerClass
 
   /* Signals */
   void (*new_connection)(C2IPConnectionManager *cm,
-			 guint device_type, const gchar *name,
-			 C2IPConnection *conn);
+			 C2IPConnection *conn, guint device_type, const gchar *name);
 };
 
 G_DEFINE_TYPE (C2IPConnectionManager, c2ip_connection_manager, G_TYPE_OBJECT)

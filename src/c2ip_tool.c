@@ -147,7 +147,9 @@ received_packet(C2IPConnection *conn, guint len, guint8 *packet, AppContext *app
 
 
 static void
-new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, AppContext *app)
+new_connection(C2IPConnectionManager *cm, C2IPConnection *conn,
+	       guint device_type, const gchar *name,
+	       AppContext *app)
 {
   guint id = app->next_connection_id++;
   g_object_set_qdata(G_OBJECT(conn), connection_id_quark, GSIZE_TO_POINTER(id));
@@ -157,7 +159,7 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, AppContext *app)
     set_default_connection(id);
   }
   start_text();
-  printf("%d> New connection\n", id);
+  printf("%d> New connection to device %s\n", id, name);
   end_text();
   g_object_set(conn, "reply-ping", !app->no_ping_reply,
 	       "ping-interval", app->no_ping ? 0 : 5000, NULL);
