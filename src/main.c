@@ -140,8 +140,16 @@ device_found(C2IPScan *scanner,
 static gboolean
 setup_c2ip_scanner(AppContext *app, GError **err)
 {
-  const gchar *range_str = "127.0.0.1/32";
-  GInetAddressMask *range = g_inet_address_mask_new_from_string(range_str, err);
+  gchar *range_str;
+  GInetAddressMask *range;
+  range_str = g_key_file_get_string(app->config_file, "C2IP", "Range", err);
+  if (!range_str) {
+    g_clear_error(err);
+    g_warning("No range given. Connecting to localhost");
+    range_str = g_strdup("127.0.0.1/32");
+  }
+  range = g_inet_address_mask_new_from_string(range_str, err);
+  g_free(range_str);
   if (!range) {
     return FALSE;
   }
@@ -396,24 +404,25 @@ main(int argc, char *argv[])
   app_ctxt.dmx_device =
     g_key_file_get_string(app_ctxt.config_file, "DMXPort", "Device", &err);
   if (!app_ctxt.dmx_device) {
-    g_printerr("No device: %s\n", err->message);
-    app_cleanup(&app_ctxt);
-    return EXIT_FAILURE;
-  }
-  app_ctxt.dmx_speed =
-    g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "Speed", &err);
-  if (err) {
-    app_ctxt.dmx_speed = 250000;
+    g_printerr("No device: %s, DMX disabled\n", err->message);
     g_clear_error(&err);
+  } else {
+    app_ctxt.dmx_speed =
+      g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "Speed", &err);
+    if (err) {
+      app_ctxt.dmx_speed = 250000;
+      g_clear_error(&err);
+    }
+    
+    app_ctxt.dmx_recv = dmx_recv_new(app_ctxt.dmx_device, &err);
+    if (!app_ctxt.dmx_recv) {
+      g_printerr("Failed setup DMX port: %s\n", err->message);
+      app_cleanup(&app_ctxt);
+      return EXIT_FAILURE;
+    }
+    g_signal_connect(app_ctxt.dmx_recv, "new-packet", (GCallback)dmx_packet, &app_ctxt);
   }
-
-  app_ctxt.dmx_recv = dmx_recv_new(app_ctxt.dmx_device, &err);
-  if (!app_ctxt.dmx_recv) {
-    g_printerr("Failed setup DMX port: %s\n", err->message);
-    app_cleanup(&app_ctxt);
-    return EXIT_FAILURE;
-  }
-  g_signal_connect(app_ctxt.dmx_recv, "new-packet", (GCallback)dmx_packet, &app_ctxt);
+  
   app_ctxt.http_server = http_server_new();
   configure_http_server(&app_ctxt);
   if (!http_server_start(app_ctxt.http_server, &err)) {
