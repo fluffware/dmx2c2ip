@@ -198,7 +198,7 @@ cleanup_connection(C2IPConnectionManager *cm)
   }
   g_clear_object(&cm->connection);
   g_clear_object(&cm->client);
-  g_idle_add((GSourceFunc)setup_next_connection,cm);
+  g_idle_add(idle_next_connection,cm);
 }
 
 static void
