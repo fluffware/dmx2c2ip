@@ -18,7 +18,7 @@ c2ip_value.c c2ip_value.h \
 c2ip_device.c c2ip_device.h \
 c2ip_strings.c c2ip_strings.h
 
-dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@
+dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ -lm
 
 dmx_send_sources = dmx_send.c
 

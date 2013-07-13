@@ -10,6 +10,8 @@
 #define C2IP_S16(b) (((((int8_t*)(b))[0])<<8)| ((uint8_t*)(b))[1])
 #define C2IP_U16_SET(b,v) \
   (((uint8_t*)(b))[0] = (v) >> 8, ((uint8_t*)(b))[1] = (v))
+#define C2IP_S16_SET(b,v) \
+  (((uint8_t*)(b))[0] = ((gint16)(v)) >> 8, ((uint8_t*)(b))[1] = (v))
 
 #define C2IP_PKT_TYPE_NAME_SERVER 8
 #define C2IP_PKT_TYPE_SETUP 1
@@ -409,6 +411,7 @@
 #define C2IP_TYPE_BOOL 2
 #define C2IP_TYPE_STRING 4
 #define C2IP_TYPE_S16 5
+#define C2IP_TYPE_U16 0x0f /* FIXME not known */
 #define C2IP_TYPE_U12 0x80
 #define C2IP_TYPE_FLOAT16 0x85
 #define C2IP_TYPE_FLAG_RELATIVE 0x40

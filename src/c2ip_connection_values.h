@@ -7,7 +7,8 @@
 
 #define C2IP_CONNECTION_VALUES_ERROR (c2ip_connection_values_error_quark())
 enum {
-  C2IP_CONNECTION_VALUES_ERROR_INVALID_REPLY = 1
+  C2IP_CONNECTION_VALUES_ERROR_INVALID_ID = 1,
+  C2IP_CONNECTION_VALUES_ERROR_INCOMPATIBLE_VALUE
 };
 
 #define C2IP_CONNECTION_VALUES_TYPE                  (c2ip_connection_values_get_type ())
@@ -46,5 +47,10 @@ c2ip_connection_values_foreach(C2IPConnectionValues *values,
 
 C2IPDevice *
 c2ip_connection_values_get_device(C2IPConnectionValues *values);
+
+gboolean
+c2ip_connection_values_change_value(C2IPConnectionValues *values,
+				    guint id, const GValue *value,
+				    GError **err);
 
 #endif /* __C2IP_CONNECTION_VALUES_H__VKTC6X6CAL__ */

@@ -6,7 +6,9 @@ U8	Unsigned 8 bit integer
 U12	Unsigned big endian 12 bit integer, just a limited U16
 U16	Unsigned big endian 16 bit integer
 STRING	One byte length followed by characters
-VTYPE	Value type
+BOOL	8bit 
+ENUM	8bit
+VTYPE	Value type, 8 bit
 	0	U8
 	1	Enumeration
 	2	Boolean

@@ -27,6 +27,8 @@ value_type_str(uint8_t type)
     return "STRING";
   case C2IP_TYPE_S16:
     return "S16";
+  case C2IP_TYPE_U16:
+    return "U16";
   case C2IP_TYPE_U12:
     return "U12";
   case C2IP_TYPE_FLOAT16:
@@ -59,6 +61,7 @@ value_str(char *buffer, size_t size, uint8_t type, const uint8_t *b)
     snprintf(buffer, size, "%d", C2IP_S16(b+1));
     break;
   case C2IP_TYPE_U12:
+  case C2IP_TYPE_U16:
     snprintf(buffer, size, "%d", C2IP_U16(b+1));
     break;
   case C2IP_TYPE_FLOAT16:

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <dmx_recv.h>
 #include <stdlib.h>
+#include <string.h>
 #include <glib-unix.h>
 #include "httpd.h"
 #include <c2ip.h>
@@ -29,7 +30,7 @@ struct AppContext
   HTTPServer *http_server;
   C2IPScan *c2ip_scanner;
   C2IPConnectionManager *c2ip_connection_manager;
-  GSList *values;
+  GTree *values;
 };
   
 AppContext app_ctxt  = {
@@ -44,9 +45,16 @@ AppContext app_ctxt  = {
   NULL
 };
 
+static gint
+id_cmp(gconstpointer a, gconstpointer b, gpointer user_data)
+{
+  return GPOINTER_TO_SIZE(a) -  GPOINTER_TO_SIZE(b);
+}
+
 static void
 app_init(AppContext *app)
 {
+  app->values = g_tree_new_full(id_cmp, NULL, NULL, g_object_unref);
 }
 
 static void
@@ -56,11 +64,26 @@ app_cleanup(AppContext* app)
   g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
-  g_slist_free_full(app->values,g_object_unref);
+  g_tree_destroy(app->values);
   app->values = NULL;
   g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
   g_free(app->dmx_device);
+}
+
+static gpointer
+make_device_key(guint type, const gchar *name)
+{
+  guint id = atoi(name);
+  return GSIZE_TO_POINTER(type<<16 | id);
+}
+
+static gpointer
+make_device_key_from_device(const C2IPDevice *dev)
+{
+  const gchar *name = c2ip_device_get_device_name(dev);
+  guint type = c2ip_device_get_device_type(dev);
+  return make_device_key(type, name);
 }
 
 static void
@@ -77,13 +100,63 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   }
   g_free(str);
 }
-
-void http_value_changed(HTTPServer *server, GQuark path, const GValue *value,
-		      AppContext *app)
+static void
+change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
 {
+  C2IPConnectionValues *values;
+  gchar *name = g_alloca(strlen(pathstr));
+  gchar *typestr;
+  gchar *idstr;
+  guint type;
+  gpointer key;
+  strcpy(name, pathstr);
+  typestr = index(name, '/');
+  if (typestr == NULL || typestr == name) return;
+  *typestr++ = '\0';
+  idstr = index(typestr, '/');
+  if (idstr == NULL || typestr == idstr) return;
+  *idstr++ = '\0';
+  if (strcmp(typestr, "base") == 0) {
+    type = C2IP_DEVICE_BASE_STATION;
+  } else if (strcmp(typestr, "camera") == 0) {
+    type = C2IP_DEVICE_CAMERA_HEAD;
+  } else if (strcmp(typestr, "OCP") == 0) {
+    type = C2IP_DEVICE_OCP;
+  } else {
+    return;
+  }
+  key = make_device_key(type, name);
+  values = g_tree_lookup(app->values, key);
+  if (!values) {
+    g_warning("No matching device found when changing value");
+    return;
+  }
+  {
+    GError *err = NULL;
+    if (!c2ip_connection_values_change_value(values, atoi(idstr),
+					     gvalue, &err)) {
+      g_warning("Failed to change function %s: %s", idstr, err->message);
+      g_clear_error(&err);
+    }
+  }
+  g_debug("Changing value %d %s %s", type, name, idstr);
+}
+
+static void
+http_value_changed(HTTPServer *server, GQuark path, const GValue *value,
+		   AppContext *app)
+{
+  const gchar *pathstr = g_quark_to_string(path);
+#if 0
   gchar *vstr = g_strdup_value_contents(value);
   g_debug("%s = %s", g_quark_to_string(path),vstr);
   g_free(vstr);
+#endif
+  if (g_str_has_prefix(pathstr, "functions/values/")) {
+    change_c2ip_value(app, &pathstr[17], value);
+  } else {
+    g_warning("Unhandled value from HTTP server: %s", pathstr);
+  }
 }
 
 static void
@@ -167,10 +240,13 @@ setup_c2ip_scanner(AppContext *app, GError **err)
   return TRUE;
 }
 
+
 static void
 connection_closed(C2IPConnectionValues *values, AppContext *app)
 {
-  app->values = g_slist_remove (app->values, values);
+  const C2IPDevice *dev = c2ip_connection_values_get_device(values);
+  gconstpointer key = make_device_key_from_device(dev);
+  g_tree_remove (app->values, key);
   g_object_unref(values);
   g_debug("Connection closed");
 }
@@ -273,6 +349,7 @@ export_value(C2IPValue *value, gpointer user_data)
   switch( c2ip_value_get_value_type(value)) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_U12:
+  case C2IP_TYPE_U16:
   case C2IP_TYPE_S16:
   case C2IP_TYPE_ENUM:
   case C2IP_TYPE_BOOL:
@@ -337,7 +414,8 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_typ
   dev = c2ip_connection_values_get_device(values);
   c2ip_device_set_device_type(dev, device_type);
   c2ip_device_set_device_name(dev, name);
-  app->values = g_slist_prepend(app->values, values);
+  g_tree_insert(app->values, make_device_key_from_device(dev), values);
+  g_object_ref(values);
   g_signal_connect(values, "connection-closed",
 		   (GCallback)connection_closed, app);
    g_signal_connect(values, "values-ready",

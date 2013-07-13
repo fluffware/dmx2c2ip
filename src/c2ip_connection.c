@@ -514,7 +514,7 @@ c2ip_connection_send_value_change(C2IPConnection *conn, guint16 id,
   buffer[7] = 0x00;
   buffer[8] = type;
   buffer[9] = value_length;
-  memcpy(buffer, value, value_length);
+  memcpy(&buffer[10], value, value_length);
   res = send_request(conn, buffer, value_length + 10, err);
   g_free(buffer);
   return res;

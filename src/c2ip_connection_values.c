@@ -4,6 +4,7 @@
 #include "c2ip.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 GQuark
 c2ip_connection_values_error_quark()
@@ -193,9 +194,39 @@ get_float16(const guint8 *b)
   static const float exp[] = {1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7,
 			      1e-8,1e-7,1e-6, 1e-5, 1e-4, 1e-3, 1e-2,1e-1};
   uint16_t v = C2IP_U16(b);
-  gfloat f = ((gfloat)((v>>4) & 0x3ff)) * exp[v&0x0f];
+  gfloat f = ((gfloat)((v>>4) & 0x7ff)) * exp[v&0x0f];
   if (v & 0x8000) f = -f;
   return f;
+}
+
+void
+set_float16(guint8 *b, gfloat f)
+{
+  gboolean n = f < 0.0;
+  gint m = 0;
+  if (n) f = -f;
+  if (f == 0.0) {
+    C2IP_U16_SET(b, 0x0000);
+    return;
+  }
+  if (f > 0x3ff) {
+    do {
+      f *= 0.1;
+      m++;
+    } while(f > 0x3ff);
+    } else {
+    while(f < (0x3ff / 10)) {
+      f *= 10.0;
+      m--;
+      }
+  }
+  if (m > 7) {
+    C2IP_U16_SET(b, 0x7ff7 & (n?0x8000:0));
+  } else if (m < -8) {
+    C2IP_U16_SET(b, 0x0000);
+  } else {
+    C2IP_U16_SET(b, (n?0x8000:0) | (lrint(f)<<4) | (m & 0x000f));
+  }
 }
 
 static void 
@@ -268,6 +299,7 @@ handle_value_reply(C2IPConnectionValues *values,
     g_object_set(v, "value-int", C2IP_S16(&packet[10]),NULL);
     break;
   case C2IP_TYPE_U12:
+  case C2IP_TYPE_U16:
     g_object_set(v, "value-int", C2IP_U16(&packet[10]),NULL);
     break;
   case C2IP_TYPE_STRING:
@@ -465,4 +497,64 @@ C2IPDevice *
 c2ip_connection_values_get_device(C2IPConnectionValues *values)
 {
   return values->device;
+}
+
+gboolean
+c2ip_connection_values_change_value(C2IPConnectionValues *values,
+				    guint id, const GValue *gvalue,
+				    GError **err)
+{
+  GValue transformed = G_VALUE_INIT;
+  guint vtype;
+  guint vsize;
+  guint8 vbuffer[255];
+  C2IPValue *v = c2ip_connection_values_get_value(values, id);
+  if (!v) {
+    g_set_error(err,
+		C2IP_CONNECTION_VALUES_ERROR,
+		C2IP_CONNECTION_VALUES_ERROR_INVALID_ID,
+		"No function with ID %d found", id);
+    return FALSE;
+  }
+  g_value_init(&transformed, G_VALUE_TYPE(c2ip_value_get_value(v)));
+  if (!g_value_transform(gvalue, &transformed)) {
+    g_set_error(err,
+		C2IP_CONNECTION_VALUES_ERROR,
+		C2IP_CONNECTION_VALUES_ERROR_INCOMPATIBLE_VALUE,
+		"Incompatible types (%s -> %s)",
+		G_VALUE_TYPE_NAME(gvalue),
+		G_VALUE_TYPE_NAME(c2ip_value_get_value(v)));
+  }
+  vtype = c2ip_value_get_value_type(v);
+ 
+  switch(vtype) {
+  case C2IP_TYPE_U8:
+  case C2IP_TYPE_BOOL:
+  case C2IP_TYPE_ENUM:
+    vbuffer[0] = g_value_get_int(&transformed);
+    vsize = 1;
+    break;
+  case C2IP_TYPE_U16:
+  case C2IP_TYPE_U12:
+    C2IP_U16_SET(vbuffer, g_value_get_int(&transformed));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_S16:
+    C2IP_S16_SET(vbuffer, g_value_get_int(&transformed));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_FLOAT16:
+    set_float16(vbuffer, g_value_get_float(&transformed));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_STRING:
+    {
+      const gchar *str =  g_value_get_string(&transformed);
+      vsize = strlen(str);
+      memcpy(vbuffer, str, vsize);
+    }
+  }
+  g_value_unset(&transformed);
+  return c2ip_connection_send_value_change(values->conn, id,
+					   vtype, vsize, vbuffer,err);
 }
