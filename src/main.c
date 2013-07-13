@@ -78,7 +78,7 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   g_free(str);
 }
 
-void value_changed_cb(HTTPServer *server, GQuark path, const GValue *value,
+void http_value_changed(HTTPServer *server, GQuark path, const GValue *value,
 		      AppContext *app)
 {
   gchar *vstr = g_strdup_value_contents(value);
@@ -91,6 +91,9 @@ configure_http_server(AppContext *app)
 {
   GError *err = NULL;
   guint port;
+  /* Break update loops */
+  g_object_set(app->http_server, "http-sets-values", FALSE,
+	       "user-changes-signaled", FALSE, NULL);
   port = g_key_file_get_integer(app_ctxt.config_file, "HTTP", "Port", &err);
   if (!err) {
     g_object_set(app->http_server, "http-port", port, NULL);
@@ -105,7 +108,7 @@ configure_http_server(AppContext *app)
 			    app_ctxt.config_file, "HTTP", "Root");
   
   http_server_set_int(app->http_server, "foo", 78, NULL);
-  g_signal_connect(app->http_server, "value-changed", (GCallback)value_changed_cb, app);
+  g_signal_connect(app->http_server, "value-changed", (GCallback)http_value_changed, app);
   http_server_set_double(app->http_server, "bar/0", 3.1415, NULL);
   http_server_set_double(app->http_server, "bar/1", -1.41, NULL);
   http_server_set_boolean(app->http_server, "up", TRUE, NULL);
@@ -237,7 +240,6 @@ export_option(guint n, const gchar *name,
 {
   struct ExportOptions *export = user_data;
   g_string_append_printf(export->path,"%d",n);
-  g_debug("%s %d = %s",export->path->str, n, name);
   http_server_set_string(export->server, export->path->str,
 			 name, NULL);
   g_string_truncate( export->path, export->prefix_len);
@@ -268,7 +270,6 @@ export_value(C2IPValue *value, gpointer user_data)
   C2IPDevice *dev = c2ip_value_get_device(value);
   append_device_path(str, dev);
   g_string_append_printf(str, "/%d", c2ip_value_get_id(value));
-  g_debug("Inserting at path %s", str->str);
   switch( c2ip_value_get_value_type(value)) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_U12:
@@ -322,7 +323,7 @@ values_ready(C2IPConnectionValues *values, AppContext *app)
 }
 
 static void
-value_changed(C2IPConnectionValues *values, C2IPValue *value, AppContext *app)
+c2ip_value_changed(C2IPConnectionValues *values, C2IPValue *value, AppContext *app)
 {
   export_value(value, app);
 }
@@ -342,7 +343,7 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_typ
    g_signal_connect(values, "values-ready",
 		   (GCallback)values_ready, app);
    g_signal_connect(values, "value-changed",
-		   (GCallback)value_changed, app);
+		   (GCallback)c2ip_value_changed, app);
   
   g_debug("New connection");
 }

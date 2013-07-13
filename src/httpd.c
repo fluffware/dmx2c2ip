@@ -41,6 +41,8 @@ enum
   PROP_USER,
   PROP_PASSWORD,
   PROP_HTTP_ROOT,
+  PROP_HTTP_SETS_VALUES,
+  PROP_USER_CHANGES_SIGNALED,
   N_PROPERTIES
 };
 
@@ -53,6 +55,9 @@ struct _HTTPServer
   gchar *password;
   guint port;
   gchar *http_root;
+  gboolean http_sets_values;
+  gboolean user_changes_signaled;
+  
   GRWLock value_lock; /* Protects any access to value_root and its descendants */
   JsonNode *value_root;
   GData *json_nodes; /* A map of JSON nodes */
@@ -156,6 +161,12 @@ set_property (GObject *object, guint property_id,
       g_free(server->http_root);
       server->http_root = g_value_dup_string(value);
       break;
+    case PROP_HTTP_SETS_VALUES:
+      server->http_sets_values = g_value_get_boolean(value);
+      break;
+    case PROP_USER_CHANGES_SIGNALED:
+      server->user_changes_signaled = g_value_get_boolean(value);
+      break;
     default:
        /* We don't have any other property... */
        G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -180,6 +191,12 @@ get_property (GObject *object, guint property_id,
     break;
   case PROP_HTTP_ROOT:
     g_value_set_string(value, server->http_root);
+    break;
+  case PROP_HTTP_SETS_VALUES:
+    g_value_set_boolean(value, server->http_sets_values);
+    break;
+  case PROP_USER_CHANGES_SIGNALED:
+    g_value_set_boolean(value, server->user_changes_signaled);
     break;
   default:
     /* We don't have any other property... */
@@ -219,6 +236,16 @@ http_server_class_init (HTTPServerClass *klass)
   properties[PROP_HTTP_ROOT]
     =  g_param_spec_string("http-root", "HTTP root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+  properties[PROP_HTTP_SETS_VALUES]
+    =  g_param_spec_boolean("http-sets-values", "HTTP sets values",
+			    "If true the JSON values are directly changed "
+			    "by HTTP requests, otherwise the user is only "
+			    "signaled but the values are unchanged.",
+			    TRUE, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+  properties[PROP_USER_CHANGES_SIGNALED]
+    =  g_param_spec_boolean("user-changes-signaled", "Changes signaled",
+			    "Changes made by the user is signaled back.",
+			    TRUE, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
   http_server_signals[VALUE_CHANGED] =
     g_signal_new("value-changed",
@@ -238,6 +265,8 @@ http_server_init(HTTPServer *server)
   server->password = NULL;
   server->port = 8080;
   server->http_root = NULL;
+  server->http_sets_values = TRUE;
+  server->user_changes_signaled = TRUE;
   g_datalist_init(&server->json_nodes);
   server->value_root = json_node_new(JSON_NODE_OBJECT);
   json_node_take_object(server->value_root, json_object_new());
@@ -541,7 +570,9 @@ insert_value(HTTPServer *server, const gchar *pathstr, const GValue *new_value,
        return 0;
     }
     json_node_set_value(node, &v);
-    pending_change(server, pathstr, &v);
+    if (server->user_changes_signaled) {
+      pending_change(server, pathstr, &v);
+    }
     g_value_unset(&v);
   } else {
     const gchar *path_suffix;
@@ -580,7 +611,9 @@ insert_value(HTTPServer *server, const gchar *pathstr, const GValue *new_value,
 	    json_object_set_member(json_node_get_object(node), n, child);
 	    g_free(n);
 	    g_datalist_set_data(&server->json_nodes, pathstr, value_node);
-	    pending_change(server, pathstr, new_value);
+	    if (server->user_changes_signaled) {
+	      pending_change(server, pathstr, new_value);
+	    }
 	    return TRUE;
 	  }
 	  g_free(n);
@@ -906,7 +939,9 @@ copy_node(HTTPServer *server, const gchar *pathstr,
       g_value_init(&dest_value, json_node_get_value_type(dest));
       g_value_transform(&src_value, &dest_value);
       if (!node_value_equal(dest, &dest_value)) {
-	json_node_set_value (dest, &dest_value);
+	if (server->http_sets_values) {
+	  json_node_set_value (dest, &dest_value);
+	}
 	if (*pathstr == '/') pathstr++;
 	pending_change(server, pathstr, &dest_value);
       }
@@ -1070,17 +1105,6 @@ request_handler(void *user_data, struct MHD_Connection * connection,
 				  upload_data, upload_data_size);
   }
 
-
-
-
-
-
-
-void
-httpd_start(void)
-{
- 
-}
 
 HTTPServer *
 http_server_new(void)
