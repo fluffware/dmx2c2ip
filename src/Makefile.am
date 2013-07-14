@@ -16,7 +16,10 @@ c2ip_connection_values.c c2ip_connection_values.h \
 c2ip_connection_values_marshal.c c2ip_connection_values_marshal.h \
 c2ip_value.c c2ip_value.h \
 c2ip_device.c c2ip_device.h \
-c2ip_strings.c c2ip_strings.h
+c2ip_strings.c c2ip_strings.h \
+sqlite/sqlite3.c sqlite/sqlite3.h \
+dmx_c2ip_mapper.c dmx_c2ip_mapper.h
+
 
 dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ -lm
 

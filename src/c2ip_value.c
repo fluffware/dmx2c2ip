@@ -118,10 +118,13 @@ enum
   PROP_VALUE_INT,
   PROP_VALUE_STRING,
   PROP_VALUE_FLOAT,
+  PROP_VALUE,
   PROP_OPTIONS,
   PROP_UNIT,
   N_PROPERTIES
 };
+
+static GParamSpec *properties[N_PROPERTIES];
 
 struct _C2IPValue
 {
@@ -194,8 +197,21 @@ set_property (GObject *object, guint property_id,
 	  gchar *vstr = g_strdup_value_contents (gvalue);
 	  g_warning("Failed to set ID %d to %s", value->id, vstr);
 	  g_free(vstr);
+	} else {
+	  g_object_notify_by_pspec(object, properties[PROP_VALUE]);
 	}
       }
+      break;
+    case PROP_VALUE:
+      {
+	const GValue *v =  g_value_get_pointer(gvalue);
+	if (!g_value_transform(v, &value->value)) {
+	  gchar *vstr = g_strdup_value_contents (gvalue);
+	  g_warning("Failed to set ID %d to %s", value->id, vstr);
+	  g_free(vstr);
+	}
+      }
+      break;
     case PROP_OPTIONS:
       break;
     case PROP_UNIT:
@@ -252,7 +268,6 @@ get_property (GObject *object, guint property_id,
 static void
 c2ip_value_class_init (C2IPValueClass *klass)
 {
-  GParamSpec *properties[N_PROPERTIES];
   GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
   
   /* C2IPValueClass *conn_class = C2IP_VALUE_CLASS(klass); */
@@ -307,7 +322,11 @@ c2ip_value_class_init (C2IPValueClass *klass)
     g_param_spec_float("value-float", "Float value",
 			 "Value as floating point",
 			-1e6,1e6, 0.0,
-			G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+		       G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+  properties[PROP_VALUE] =
+    g_param_spec_pointer("value", "Value",
+		       "Value as GValue",
+		       G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
 }
 
@@ -470,6 +489,7 @@ guint
 c2ip_value_set_flags(C2IPValue *value, guint flags, guint mask)
 {
   value->flags = (value->flags & ~mask) | (flags & mask);
+  g_object_notify_by_pspec(G_OBJECT(value), properties[PROP_FLAGS]);
   return value->flags;
 }
 
@@ -483,6 +503,7 @@ const GValue *
 c2ip_value_set_value(C2IPValue *value, const GValue *v)
 {
   g_value_copy(v, &value->value);
+  g_object_notify_by_pspec(G_OBJECT(value), properties[PROP_VALUE]);
   return &value->value;
 }
 
@@ -497,6 +518,7 @@ c2ip_value_set_unit(C2IPValue *value, const gchar *unit)
 {
   g_free(value->unit);
   value->unit = g_strdup(unit);
+  g_object_notify_by_pspec(G_OBJECT(value), properties[PROP_UNIT]);
   return value->unit;
 }
 

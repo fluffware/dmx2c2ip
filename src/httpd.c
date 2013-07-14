@@ -87,8 +87,6 @@ struct _HTTPServerClass
 
 JsonNode *
 get_node(HTTPServer *server, const gchar *path, GError **err);
-static gboolean
-delete_node(HTTPServer *server, const gchar *path, GError **err);
 
 static GQuark
 insert_value(HTTPServer *server, const gchar *path, const GValue *value,
@@ -108,7 +106,7 @@ dispose(GObject *gobj)
   g_clear_object(&server->json_generator);
   g_clear_object(&server->json_parser);
   if (server->value_root) {
-    delete_node(server, "/", NULL);
+    json_node_free(server->value_root);
     g_datalist_clear(&server->json_nodes);
     server->value_root = NULL;
   }
@@ -515,6 +513,7 @@ create_parent_nodes(HTTPServer *server, const char *path, const char *child_path
     n = g_strndup(child_path, end - child_path);
     json_object_set_member(obj, n, child);
     g_free(n);
+    json_node_set_parent(child, node);
     n = g_strndup(path, child_path - path - 1);
     g_datalist_set_data(&server->json_nodes, n, node);
     g_free(n);
@@ -610,6 +609,7 @@ insert_value(HTTPServer *server, const gchar *pathstr, const GValue *new_value,
 	    }
 	    json_object_set_member(json_node_get_object(node), n, child);
 	    g_free(n);
+	    json_node_set_parent(child, node);
 	    g_datalist_set_data(&server->json_nodes, pathstr, value_node);
 	    if (server->user_changes_signaled) {
 	      pending_change(server, pathstr, new_value);
@@ -648,14 +648,25 @@ delete_node_node_callback(GQuark key_id, gpointer data, gpointer user_data)
 static gboolean
 delete_node(HTTPServer *server, const gchar *pathstr, GError **err)
 {
+  gchar *last;
   struct DeleteNodeContext ctxt;
   JsonNode *node = get_node(server, pathstr, err);
+  JsonNode *parent;
   if (!node) return FALSE;
+  parent = json_node_get_parent(node);
+  last = rindex(pathstr, '/');
+  last++;
+  json_object_remove_member(json_node_get_object(parent), last);
   ctxt.list = &server->json_nodes;
   ctxt.prefix = pathstr;
   g_datalist_foreach(&server->json_nodes, delete_node_node_callback, &ctxt);
-  json_node_free(node);
   return TRUE;
+}
+
+gboolean
+http_server_remove(HTTPServer *server, const gchar *path, GError **err)
+{
+  return delete_node(server, path, err);
 }
 
 GQuark

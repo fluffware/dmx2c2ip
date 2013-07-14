@@ -11,8 +11,15 @@
     <script type="application/javascript" src="jquery_min.js">
     </script>
   </head>
-  <body onload="upd = new ExpandTable( $('#device_table'), 'values/functions/attributes/1/camera', ''); upd = new FieldUpdate('values/functions/values/1/camera', $('#device_table')); upd.start();">
+  <body onload="SetDeviceOptions('values/functions/values',$('#device_select'),function(p) {new ExpandTable( $('#device_table'), 'values/functions/attributes/'+p, ''); upd = new FieldUpdate('values/functions/values/'+p, $('#device_table')); upd.start();});">
     <h1>C2IP devices</h1>
+    <form action="#">
+      <p>
+	<select id="device_select" name="device" onchange="new ExpandTable( $('#device_table'), 'values/functions/attributes/'+$('#device_select :selected').val(), ''); if (upd) {upd.stop();};upd = new FieldUpdate('values/functions/values/'+$('#device_select :selected').val(), $('#device_table')); upd.start();">
+	  <option value=""></option>
+	</select>
+      </p>
+    </form>
     <form action="#">
       <table id="device_table">
 	<tr>

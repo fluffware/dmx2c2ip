@@ -209,13 +209,13 @@ set_float16(guint8 *b, gfloat f)
     C2IP_U16_SET(b, 0x0000);
     return;
   }
-  if (f > 0x3ff) {
+  if (f > 0x7ff) {
     do {
       f *= 0.1;
       m++;
-    } while(f > 0x3ff);
+    } while(f > 0x7ff);
     } else {
-    while(f < (0x3ff / 10)) {
+    while(f < (0x7ff / 10)) {
       f *= 10.0;
       m--;
       }
@@ -268,6 +268,54 @@ setup_device(C2IPValue *value)
 }
 
 static void
+value_object_changed(C2IPValue *v, GParamSpec *pspec,
+		     C2IPConnectionValues *values)
+{
+  const GValue *gvalue;
+  guint vtype;
+  guint vsize;
+  guint8 vbuffer[255];
+  
+  vtype = c2ip_value_get_value_type(v);
+  gvalue = c2ip_value_get_value(v);
+  switch(vtype) {
+  case C2IP_TYPE_U8:
+  case C2IP_TYPE_BOOL:
+  case C2IP_TYPE_ENUM:
+    vbuffer[0] = g_value_get_int(gvalue);
+    vsize = 1;
+    break;
+  case C2IP_TYPE_U16:
+  case C2IP_TYPE_U12:
+    C2IP_U16_SET(vbuffer, g_value_get_int(gvalue));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_S16:
+    C2IP_S16_SET(vbuffer, g_value_get_int(gvalue));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_FLOAT16:
+    set_float16(vbuffer, g_value_get_float(gvalue));
+    vsize = 2;
+    break;
+  case C2IP_TYPE_STRING:
+    {
+      const gchar *str =  g_value_get_string(gvalue);
+      vsize = strlen(str);
+      memcpy(vbuffer, str, vsize);
+    }
+  }
+  {
+    GError *err = NULL;
+    if (!c2ip_connection_send_value_change(values->conn, c2ip_value_get_id(v),
+					   vtype, vsize, vbuffer,&err)) {
+      g_warning("Failed to send function value change: %s", err->message);
+      g_clear_error(&err);
+    }
+  }
+}
+
+static void
 handle_value_reply(C2IPConnectionValues *values,
 		   guint length, const guint8 *packet)
 {
@@ -280,8 +328,12 @@ handle_value_reply(C2IPConnectionValues *values,
   if (!v) {
     v = c2ip_value_new(id, type & C2IP_TYPE_MASK);
     c2ip_value_set_device(v, values->device);
+    g_signal_connect_object(v, "notify::value",
+			    (GCallback)value_object_changed ,values, 0);
     g_tree_insert(values->values, GSIZE_TO_POINTER(id), v);
   }
+  g_signal_handlers_block_matched(v,  G_SIGNAL_MATCH_DATA,
+				  0, 0, NULL, NULL, values);
   value_flags |= (flags & C2IP_FLAG_READ_DISABLED)? 0: C2IP_VALUE_FLAG_READABLE;
   value_flags |= (flags & C2IP_FLAG_WRITE_DISABLED)?0:C2IP_VALUE_FLAG_WRITABLE;
   value_flags |= (flags & C2IP_FLAG_HAS_INFO) ? C2IP_VALUE_FLAG_HAS_INFO : 0;
@@ -315,6 +367,8 @@ handle_value_reply(C2IPConnectionValues *values,
        g_object_set(v, "value-float", f, NULL);
     }
   }
+  g_signal_handlers_unblock_matched(v,  G_SIGNAL_MATCH_DATA,
+				    0, 0, NULL, NULL, values);
   setup_device(v);
   if (values->setup_state != SETUP_GETTING_VALUES) {
     g_signal_emit(values, c2ip_connection_values_signals[VALUE_CHANGED], 0, v);

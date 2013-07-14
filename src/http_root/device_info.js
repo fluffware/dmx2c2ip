@@ -4,9 +4,11 @@ function ExpandTable(table, url, value_prefix)
     var url = url;
     var table = table;
     var value_prefix = value_prefix;
-    var template = $(table).find("tr[class = 'template']");
+    var row = $(table).find("tr.template");
+    row.hide();
+    var template = row.clone();
     template.hide();
-    template.removeAttr("class");
+    template.removeClass("template");
     requestUpdate(this);
 
     function requestUpdate(upd) 
@@ -21,13 +23,10 @@ function ExpandTable(table, url, value_prefix)
     
     function handleValueReply(data,status,req)
     {
-	console.log("Reply");
+	table.find("tr[row-id]").remove();
 	for (id in data) {
-	    var row = table.find("tr[row-id = "+id+"]");
-	    if (row.empty()) {
-		row = template.clone();
-		row.attr("row-id", id);
-	    }
+	    var row = template.clone();
+	    row.attr("row-id", id);
 	    table.append(row);
 	    row.show();
 	    var attrs = data[id];
@@ -52,9 +51,52 @@ function ExpandTable(table, url, value_prefix)
 			  $(this).attr("path", value_prefix+id);
 		      });
 	}
+	table.find("tr.remove-row").remove();
     }
 
     function requestError(req,status,error)
     {
+    }
+}
+
+function SetDeviceOptions(url_arg, select_element, done)
+{
+    var url = url_arg;
+    var sel = select_element;
+
+    jQuery.getJSON(url, handleValueReply);
+
+    function handleValueReply(values,status,req)
+    {
+	console.log($(sel.find('option:first')));
+	var templ = sel.find('option:first').detach();
+	sel.find('option').remove();
+	for (id in values) {
+	    for (type in values[id]) {
+		var label;
+		switch(type) {
+		case "camera":
+		    label="Camera "+id;
+		    break;
+		case "base":
+		    label="Base station "+id;
+		    break;
+		case "camera":
+		    label="OCP "+id;
+		    break;
+		default:
+		    label=type+" "+id;
+		    break;
+		}
+		var path = id+'/'+type;
+		var new_option = templ.clone();
+		new_option.attr("value", path);
+		new_option.text(label);
+		sel.append(new_option);
+	    }
+	}
+	if (done) {
+	    done(sel.find(':selected').val());
+	}
     }
 }

@@ -43,5 +43,7 @@ http_server_set_double(HTTPServer *server, const gchar *path, gdouble value, GEr
 GQuark
 http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str, GError **err);
 
+gboolean
+http_server_remove(HTTPServer *server, const gchar *path, GError **err);
 
 #endif /* __HTTPD_H__QAEOTYJXN0__ */

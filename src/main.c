@@ -9,6 +9,7 @@
 #include <c2ip_scan.h>
 #include <c2ip_connection_manager.h>
 #include <c2ip_connection_values.h>
+#include <dmx_c2ip_mapper.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
 
@@ -31,6 +32,8 @@ struct AppContext
   C2IPScan *c2ip_scanner;
   C2IPConnectionManager *c2ip_connection_manager;
   GTree *values;
+  DMXC2IPMapper *mapper;
+  sqlite3 *db;
 };
   
 AppContext app_ctxt  = {
@@ -38,6 +41,8 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   250000,
+  NULL,
+  NULL,
   NULL,
   NULL,
   NULL,
@@ -60,6 +65,11 @@ app_init(AppContext *app)
 static void
 app_cleanup(AppContext* app)
 {
+  g_clear_object(&app->mapper);
+  if (app->db) {
+    sqlite3_close(app->db);
+    app->db = NULL;
+  }
   g_clear_object(&app->c2ip_scanner);
   g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
@@ -87,6 +97,27 @@ make_device_key_from_device(const C2IPDevice *dev)
 }
 
 static void
+append_device_path(GString *str, const C2IPDevice *dev)
+{
+  g_string_append(str,  c2ip_device_get_device_name(dev));
+  g_string_append_c(str, '/');
+  switch(c2ip_device_get_device_type(dev)) {
+  case C2IP_DEVICE_BASE_STATION:
+    g_string_append(str, "base");
+    break;
+  case C2IP_DEVICE_CAMERA_HEAD:
+    g_string_append(str, "camera");
+    break;
+  case C2IP_DEVICE_OCP:
+    g_string_append(str, "OCP");
+    break;
+  default:
+    g_string_append(str, "unknown");
+    break;
+  }
+}
+
+static void
 configure_string_property(void *obj, const gchar *property, GKeyFile *config,
 			  const gchar *group, const gchar *key)
 {
@@ -100,10 +131,13 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   }
   g_free(str);
 }
+
 static void
 change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
 {
+  GValue transformed = G_VALUE_INIT;
   C2IPConnectionValues *values;
+  C2IPValue *v;
   gchar *name = g_alloca(strlen(pathstr));
   gchar *typestr;
   gchar *idstr;
@@ -131,14 +165,18 @@ change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
     g_warning("No matching device found when changing value");
     return;
   }
-  {
-    GError *err = NULL;
-    if (!c2ip_connection_values_change_value(values, atoi(idstr),
-					     gvalue, &err)) {
-      g_warning("Failed to change function %s: %s", idstr, err->message);
-      g_clear_error(&err);
-    }
+  v = c2ip_connection_values_get_value(values, atoi(idstr));
+  if (!v) {
+    g_warning("No matching ID");
+    return;
   }
+  g_value_init(&transformed, G_VALUE_TYPE(c2ip_value_get_value(v)));
+  if (!g_value_transform(gvalue, &transformed)) {
+    g_value_unset(&transformed);
+    return;
+  }
+  c2ip_value_set_value(v, &transformed);
+  g_value_unset(&transformed);
   g_debug("Changing value %d %s %s", type, name, idstr);
 }
 
@@ -197,7 +235,7 @@ dmx_packet(DMXRecv *recv, guint l, guint8 *packet, AppContext *app)
   guint i;
   for (i = 0; i < l;i++) {
     if (dmx_recv_channels_changed(recv, i, i + 1)) {
-      g_snprintf(buffer, sizeof(buffer), "dmx_channels/ch%d", i+1);
+      g_snprintf(buffer, sizeof(buffer), "dmx_channels/%d", i+1);
       http_server_set_int(app->http_server, buffer, packet[i], NULL);
     }
   }
@@ -244,8 +282,16 @@ setup_c2ip_scanner(AppContext *app, GError **err)
 static void
 connection_closed(C2IPConnectionValues *values, AppContext *app)
 {
+  gconstpointer key;
+  GString *path = g_string_new("functions/values/");
   const C2IPDevice *dev = c2ip_connection_values_get_device(values);
-  gconstpointer key = make_device_key_from_device(dev);
+  append_device_path(path, dev);
+  http_server_remove(app->http_server, path->str, NULL);
+  g_string_assign(path, "functions/attributes/");
+  append_device_path(path, dev);
+  http_server_remove(app->http_server, path->str, NULL);
+  g_string_free(path,TRUE);
+  key = make_device_key_from_device(dev);
   g_tree_remove (app->values, key);
   g_object_unref(values);
   g_debug("Connection closed");
@@ -279,27 +325,6 @@ print_value(C2IPValue *value, gpointer user_data)
   fflush(stdout);
   g_free(str);
   return FALSE;
-}
-
-static void
-append_device_path(GString *str, C2IPDevice *dev)
-{
-  g_string_append(str,  c2ip_device_get_device_name(dev));
-  g_string_append_c(str, '/');
-  switch(c2ip_device_get_device_type(dev)) {
-  case C2IP_DEVICE_BASE_STATION:
-    g_string_append(str, "base");
-    break;
-  case C2IP_DEVICE_CAMERA_HEAD:
-    g_string_append(str, "camera");
-    break;
-  case C2IP_DEVICE_OCP:
-    g_string_append(str, "OCP");
-    break;
-  default:
-    g_string_append(str, "unknown");
-    break;
-  }
 }
 
 struct ExportOptions
@@ -439,6 +464,35 @@ setup_c2ip(AppContext *app, GError **err)
   return TRUE;
 }
 
+static gboolean
+setup_db(AppContext *app, GError **err)
+{
+  int rc;
+  gchar *db_filename;
+  gchar *table;
+  db_filename = g_key_file_get_string(app->config_file, "DB", "File", err);
+  if (!db_filename) {
+    return FALSE;
+  }
+  table = g_key_file_get_string(app->config_file, "DB", "Table", err);
+  if (!db_filename) {
+    g_clear_error(err);
+    table = g_strdup("dmx_c2ip_map");
+  }
+
+  rc = sqlite3_open(db_filename, &app->db);
+  g_free(db_filename);
+  if (rc) {
+    g_set_error(err, G_IO_ERROR, G_IO_ERROR_FAILED,
+		"Failed to open database: %s",sqlite3_errmsg(app->db));
+    sqlite3_close(app->db);
+    g_free(table);
+    return FALSE;
+  } 
+  g_free(table);
+  return TRUE;
+}
+
 const GOptionEntry app_options[] = {
   {"config-file", 'c', 0, G_OPTION_ARG_FILENAME,
    &app_ctxt.config_filename, "Configuration file", "FILE"},
@@ -478,6 +532,11 @@ main(int argc, char *argv[])
       app_cleanup(&app_ctxt);
       return EXIT_FAILURE;
     }
+  }
+  if (!setup_db(&app_ctxt, &err)) {
+    g_printerr("Failed to setup db: %s\n", err->message);
+    app_cleanup(&app_ctxt);
+    return EXIT_FAILURE;
   }
   app_ctxt.dmx_device =
     g_key_file_get_string(app_ctxt.config_file, "DMXPort", "Device", &err);

@@ -82,7 +82,6 @@ function FieldUpdate(url_arg, top_arg)
 	for (p in parts) {
 	    element.getValue += '["'+parts[p]+'"]';
 	}
-	console.log("Path "+element.getValue)
 	
 	$(element).keypress(
 	    function(event) {
@@ -124,7 +123,6 @@ function FieldUpdate(url_arg, top_arg)
 			      prepare_input_element(element);
 			  }
 			  try {
-			      console.log(element.getValue);
 			      element.value = eval(element.getValue);
 			  } catch(e) {}
 		      }
