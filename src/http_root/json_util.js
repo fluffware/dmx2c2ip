@@ -108,7 +108,10 @@ function FieldUpdate(url_arg, top_arg)
 		    this.editing = true;
 		}
 	    });
-	element.blur(function() {
+	$(element).focus(function() {
+	    this.editing = true;
+	});
+	$(element).blur(function() {
 	    this.editing = false;
 	});
     }

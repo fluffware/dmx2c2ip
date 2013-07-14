@@ -425,7 +425,7 @@ add_mime_type(struct MHD_Response *resp, const char *filename)
   } else  if (strcmp("jpg",ext) == 0) {
     mime = "image/jpg";
   } else  if (strcmp("js",ext) == 0) {
-    mime = "application/javascrip";
+    mime = "application/javascript";
   } else  if (strcmp("xml",ext) == 0) {
     mime = "text/xml";
   } else  if (strcmp("xhtml",ext) == 0) {
@@ -752,7 +752,9 @@ json_response(HTTPServer *server, struct MHD_Connection * connection,
   }
   resp = MHD_create_response_from_callback(strlen(resp_str), 1024, string_content_handler, resp_str, string_content_handler_free);
   MHD_add_response_header(resp, "Content-Type",
-			   "application/json");
+			  "application/json");
+   MHD_add_response_header(resp, "Cache-Control",
+			  "no-cache");
   MHD_queue_response(connection, MHD_HTTP_OK, resp);
   MHD_destroy_response(resp);
   
