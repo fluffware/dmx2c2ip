@@ -31,7 +31,6 @@ struct AppContext
   HTTPServer *http_server;
   C2IPScan *c2ip_scanner;
   C2IPConnectionManager *c2ip_connection_manager;
-  GTree *values;
   DMXC2IPMapper *mapper;
   sqlite3 *db;
 };
@@ -46,20 +45,16 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   NULL,
-  NULL,
   NULL
 };
 
-static gint
-id_cmp(gconstpointer a, gconstpointer b, gpointer user_data)
-{
-  return GPOINTER_TO_SIZE(a) -  GPOINTER_TO_SIZE(b);
-}
+
+static GQuark values_quark;
 
 static void
 app_init(AppContext *app)
 {
-  app->values = g_tree_new_full(id_cmp, NULL, NULL, g_object_unref);
+  values_quark = g_quark_from_static_string("c2ip-connection-values");
 }
 
 static void
@@ -74,26 +69,9 @@ app_cleanup(AppContext* app)
   g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
-  g_tree_destroy(app->values);
-  app->values = NULL;
   g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
   g_free(app->dmx_device);
-}
-
-static gpointer
-make_device_key(guint type, const gchar *name)
-{
-  guint id = atoi(name);
-  return GSIZE_TO_POINTER(type<<16 | id);
-}
-
-static gpointer
-make_device_key_from_device(const C2IPDevice *dev)
-{
-  const gchar *name = c2ip_device_get_device_name(dev);
-  guint type = c2ip_device_get_device_type(dev);
-  return make_device_key(type, name);
 }
 
 static void
@@ -135,6 +113,7 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
 static void
 change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
 {
+  C2IPConnection *conn;
   GValue transformed = G_VALUE_INIT;
   C2IPConnectionValues *values;
   C2IPValue *v;
@@ -142,7 +121,6 @@ change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
   gchar *typestr;
   gchar *idstr;
   guint type;
-  gpointer key;
   strcpy(name, pathstr);
   typestr = index(name, '/');
   if (typestr == NULL || typestr == name) return;
@@ -159,12 +137,15 @@ change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
   } else {
     return;
   }
-  key = make_device_key(type, name);
-  values = g_tree_lookup(app->values, key);
-  if (!values) {
+
+  conn = c2ip_connection_manager_get_connection(app->c2ip_connection_manager,
+						type, name);
+  if (!conn) {
     g_warning("No matching device found when changing value");
     return;
   }
+  values = C2IP_CONNECTION_VALUES(g_object_get_qdata(G_OBJECT(conn),
+						     values_quark));
   v = c2ip_connection_values_get_value(values, atoi(idstr));
   if (!v) {
     g_warning("No matching ID");
@@ -282,7 +263,6 @@ setup_c2ip_scanner(AppContext *app, GError **err)
 static void
 connection_closed(C2IPConnectionValues *values, AppContext *app)
 {
-  gconstpointer key;
   GString *path = g_string_new("functions/values/");
   const C2IPDevice *dev = c2ip_connection_values_get_device(values);
   append_device_path(path, dev);
@@ -291,12 +271,11 @@ connection_closed(C2IPConnectionValues *values, AppContext *app)
   append_device_path(path, dev);
   http_server_remove(app->http_server, path->str, NULL);
   g_string_free(path,TRUE);
-  key = make_device_key_from_device(dev);
-  g_tree_remove (app->values, key);
   g_object_unref(values);
   g_debug("Connection closed");
 }
 
+#if 0
 static gboolean
 print_value(C2IPValue *value, gpointer user_data)
 {
@@ -326,6 +305,7 @@ print_value(C2IPValue *value, gpointer user_data)
   g_free(str);
   return FALSE;
 }
+#endif
 
 struct ExportOptions
 {
@@ -439,7 +419,7 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_typ
   dev = c2ip_connection_values_get_device(values);
   c2ip_device_set_device_type(dev, device_type);
   c2ip_device_set_device_name(dev, name);
-  g_tree_insert(app->values, make_device_key_from_device(dev), values);
+  g_object_set_qdata(G_OBJECT(conn), values_quark, values);
   g_object_ref(values);
   g_signal_connect(values, "connection-closed",
 		   (GCallback)connection_closed, app);

@@ -371,3 +371,14 @@ c2ip_connection_manager_add_device(C2IPConnectionManager *cm,
   return TRUE;
 }
 
+C2IPConnection *
+c2ip_connection_manager_get_connection(const C2IPConnectionManager *cm,
+				       guint type, const gchar *name)
+{
+  DeviceList *d = cm->devices;
+  while(d) {
+    if (type == d->type && strcmp(name, d->name) == 0) return d->connection;
+    d = d->next;
+  }
+  return NULL;
+}

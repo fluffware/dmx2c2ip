@@ -23,7 +23,7 @@ typedef struct _C2IPConnectionValuesClass C2IPConnectionValuesClass;
 
 
 GType
-c2ip_connection_values_get_value_type(void);
+c2ip_connection_values_get_type(void);
 
 C2IPConnectionValues *
 c2ip_connection_values_new(C2IPConnection *conn);

@@ -4,6 +4,7 @@
 
 #include <glib-object.h>
 #include <gio/gio.h>
+#include <c2ip_connection.h>
 
 #define C2IP_CONNECTION_MANAGER_ERROR (c2ip_connection_manager_error_quark())
 enum {
@@ -28,5 +29,9 @@ gboolean
 c2ip_connection_manager_add_device(C2IPConnectionManager *cm,
 				   guint type, const gchar *name,
 				   GInetAddress *addr, guint port);
+
+C2IPConnection *
+c2ip_connection_manager_get_connection(const C2IPConnectionManager *cm,
+				       guint type, const gchar *name);
 
 #endif /* __C2IP_CONNECTION_MANAGER_H__8KKRI2F16E__ */
