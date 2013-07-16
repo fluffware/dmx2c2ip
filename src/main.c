@@ -341,6 +341,52 @@ export_options(C2IPValue *value, GString *path, AppContext *app)
   g_string_truncate(path, prefix_len);
 }
 
+static void
+export_mapping(AppContext *app, C2IPValue *value)
+{
+  guint vtype = c2ip_value_get_value_type(value);
+  gfloat min;
+  gfloat max;
+  gboolean map = TRUE;
+  switch(vtype) {
+  case C2IP_TYPE_U8:
+    min = 0.0;
+    max = 255.0;
+    break;
+  case C2IP_TYPE_U12:
+    min = 0.0;
+    max = 4095;
+    break;
+  case C2IP_TYPE_U16:
+    min = 0.0;
+    max = 65535;
+    break;
+  case C2IP_TYPE_S16:
+    min = -32768.0;
+    max = 32767;
+    break;
+  default:
+    map = FALSE;
+  }
+  if (map) {
+    guint prefix_len;
+    C2IPDevice *dev = c2ip_value_get_device(value);
+    GString *str = g_string_new("dmxmap/");
+    append_device_path(str, dev);
+    g_string_append_printf(str, "/%d/", c2ip_value_get_id(value));
+    prefix_len = str->len;
+    g_string_append(str, "channel");
+    http_server_set_int(app->http_server, str->str, 0, NULL);
+    g_string_truncate(str, prefix_len);
+    g_string_append(str, "min");
+    http_server_set_double(app->http_server, str->str, min, NULL);
+    g_string_truncate(str, prefix_len);
+    g_string_append(str, "max");
+    http_server_set_double(app->http_server, str->str, max, NULL);
+    g_string_free(str, TRUE);
+  }
+}
+
 /* Export a value too the world through the web server */
 static gboolean
 export_value(C2IPValue *value, gpointer user_data)
@@ -349,9 +395,10 @@ export_value(C2IPValue *value, gpointer user_data)
   AppContext *app = user_data;
   GString *str = g_string_new("functions/values/");
   C2IPDevice *dev = c2ip_value_get_device(value);
+  guint vtype = c2ip_value_get_value_type(value);
   append_device_path(str, dev);
   g_string_append_printf(str, "/%d", c2ip_value_get_id(value));
-  switch( c2ip_value_get_value_type(value)) {
+  switch(vtype) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_U12:
   case C2IP_TYPE_U16:
@@ -392,8 +439,10 @@ export_value(C2IPValue *value, gpointer user_data)
     g_string_truncate(str, prefix_len);
   }
   export_options(value, str, app);
+  
+ 
   g_string_free(str, TRUE);
-
+  export_mapping(app, value);
   
   return FALSE;
 }
