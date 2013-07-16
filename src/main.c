@@ -310,6 +310,9 @@ dmx_packet(DMXRecv *recv, guint l, guint8 *packet, AppContext *app)
     if (dmx_recv_channels_changed(recv, i, i + 1)) {
       g_snprintf(buffer, sizeof(buffer), "dmx_channels/%d", i+1);
       http_server_set_int(app->http_server, buffer, packet[i], NULL);
+      if (app->mapper) {
+	dmx_c2ip_mapper_set_channel(app->mapper, i + 1, packet[i], NULL);
+      }
     }
   }
 }
