@@ -1,6 +1,6 @@
 #include "c2ip_connection_values.h"
 #include "c2ip_connection_values_marshal.h"
-#include "c2ip_value.h"
+#include "c2ip_function.h"
 #include "c2ip.h"
 #include <string.h>
 #include <stdio.h>
@@ -57,7 +57,7 @@ struct _C2IPConnectionValuesClass
 
   /* Signals */
   void (*values_ready)(C2IPConnectionValues *values);
-  void (*value_changed)(C2IPConnectionValues *values, C2IPValue *value);
+  void (*value_changed)(C2IPConnectionValues *values, C2IPFunction *value);
   void (*connection_closed)(C2IPConnectionValues *values);
 };
 
@@ -149,7 +149,7 @@ c2ip_connection_values_class_init (C2IPConnectionValuesClass *klass)
 		 G_STRUCT_OFFSET(C2IPConnectionValuesClass, value_changed),
 		 NULL, NULL,
 		 g_cclosure_marshal_VOID__OBJECT,
-		 G_TYPE_NONE, 1, C2IP_VALUE_TYPE);
+		 G_TYPE_NONE, 1, C2IP_FUNCTION_TYPE);
 }
 
 static gint
@@ -230,13 +230,13 @@ set_float16(guint8 *b, gfloat f)
 }
 
 static void 
-setup_device(C2IPValue *value)
+setup_device(C2IPFunction *value)
 {
-  C2IPDevice *dev = c2ip_value_get_device(value);
-  switch(c2ip_value_get_id(value)) {
+  C2IPDevice *dev = c2ip_function_get_device(value);
+  switch(c2ip_function_get_id(value)) {
   case C2IP_NS_CAMERA_DEVICE_ID:
     {
-      const gchar *dev_id = g_value_get_string(c2ip_value_get_value(value));
+      const gchar *dev_id = g_value_get_string(c2ip_function_get_value(value));
       c2ip_device_set_device_id(dev, dev_id);
       c2ip_device_set_device_type(dev, C2IP_DEVICE_CAMERA_HEAD);
       
@@ -244,14 +244,14 @@ setup_device(C2IPValue *value)
     break;
   case C2IP_NS_BASE_STATION_DEVICE_ID:
     {
-      const gchar *dev_id = g_value_get_string(c2ip_value_get_value(value));
+      const gchar *dev_id = g_value_get_string(c2ip_function_get_value(value));
       c2ip_device_set_device_id(dev, dev_id);
       c2ip_device_set_device_type(dev, C2IP_DEVICE_BASE_STATION);
     }
     break;
   case C2IP_NS_OCP_DEVICE_ID:
     {
-      const gchar *dev_id = g_value_get_string(c2ip_value_get_value(value));
+      const gchar *dev_id = g_value_get_string(c2ip_function_get_value(value));
       c2ip_device_set_device_id(dev, dev_id);
       c2ip_device_set_device_type(dev, C2IP_DEVICE_OCP);
     }
@@ -260,7 +260,7 @@ setup_device(C2IPValue *value)
   case C2IP_NS_CAMERA_ALIAS:
   case C2IP_NS_OCP_ALIAS:
     {
-      const gchar *alias = g_value_get_string(c2ip_value_get_value(value));
+      const gchar *alias = g_value_get_string(c2ip_function_get_value(value));
       c2ip_device_set_alias(dev, alias);
     }
     break;
@@ -268,7 +268,7 @@ setup_device(C2IPValue *value)
 }
 
 static void
-value_object_changed(C2IPValue *v, GParamSpec *pspec,
+value_object_changed(C2IPFunction *v, GParamSpec *pspec,
 		     C2IPConnectionValues *values)
 {
   const GValue *gvalue;
@@ -276,8 +276,8 @@ value_object_changed(C2IPValue *v, GParamSpec *pspec,
   guint vsize;
   guint8 vbuffer[255];
   
-  vtype = c2ip_value_get_value_type(v);
-  gvalue = c2ip_value_get_value(v);
+  vtype = c2ip_function_get_value_type(v);
+  gvalue = c2ip_function_get_value(v);
   switch(vtype) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_BOOL:
@@ -307,7 +307,7 @@ value_object_changed(C2IPValue *v, GParamSpec *pspec,
   }
   {
     GError *err = NULL;
-    if (!c2ip_connection_send_value_change(values->conn, c2ip_value_get_id(v),
+    if (!c2ip_connection_send_value_change(values->conn, c2ip_function_get_id(v),
 					   vtype, vsize, vbuffer,&err)) {
       g_warning("Failed to send function value change: %s", err->message);
       g_clear_error(&err);
@@ -319,28 +319,28 @@ static void
 handle_value_reply(C2IPConnectionValues *values,
 		   guint length, const guint8 *packet)
 {
-  C2IPValue *v;
+  C2IPFunction *v;
   guint id = C2IP_U16(&packet[5]);
   guint flags = packet[7];
   guint type = packet[8];
   guint value_flags = 0;
   v = g_tree_lookup(values->values, GSIZE_TO_POINTER(id));
   if (!v) {
-    v = c2ip_value_new(id, type & C2IP_TYPE_MASK);
-    c2ip_value_set_device(v, values->device);
+    v = c2ip_function_new(id, type & C2IP_TYPE_MASK);
+    c2ip_function_set_device(v, values->device);
     g_signal_connect_object(v, "notify::value",
 			    (GCallback)value_object_changed ,values, 0);
     g_tree_insert(values->values, GSIZE_TO_POINTER(id), v);
   }
   g_signal_handlers_block_matched(v,  G_SIGNAL_MATCH_DATA,
 				  0, 0, NULL, NULL, values);
-  value_flags |= (flags & C2IP_FLAG_READ_DISABLED)? 0: C2IP_VALUE_FLAG_READABLE;
-  value_flags |= (flags & C2IP_FLAG_WRITE_DISABLED)?0:C2IP_VALUE_FLAG_WRITABLE;
-  value_flags |= (flags & C2IP_FLAG_HAS_INFO) ? C2IP_VALUE_FLAG_HAS_INFO : 0;
+  value_flags |= (flags & C2IP_FLAG_READ_DISABLED)? 0: C2IP_FUNCTION_FLAG_READABLE;
+  value_flags |= (flags & C2IP_FLAG_WRITE_DISABLED)?0:C2IP_FUNCTION_FLAG_WRITABLE;
+  value_flags |= (flags & C2IP_FLAG_HAS_INFO) ? C2IP_FUNCTION_FLAG_HAS_INFO : 0;
 
-  c2ip_value_set_flags(v, value_flags, (C2IP_VALUE_FLAG_READABLE
-					| C2IP_VALUE_FLAG_WRITABLE
-					| C2IP_VALUE_FLAG_HAS_INFO));
+  c2ip_function_set_flags(v, value_flags, (C2IP_FUNCTION_FLAG_READABLE
+					| C2IP_FUNCTION_FLAG_WRITABLE
+					| C2IP_FUNCTION_FLAG_HAS_INFO));
   switch(type) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_BOOL:
@@ -381,7 +381,7 @@ static void
 handle_info_reply(C2IPConnectionValues *values,
 		   guint length, const guint8 *packet)
 {
-  C2IPValue *v;
+  C2IPFunction *v;
   guint id = C2IP_U16(&packet[5]);
   v = g_tree_lookup(values->values, GSIZE_TO_POINTER(id));
   if (!v) return;
@@ -394,7 +394,7 @@ handle_info_reply(C2IPConnectionValues *values,
 	guint e = *p++;
 	guint l = *p++;
 	gchar *s = g_strndup((const gchar*)p, l);
-	c2ip_value_take_option(v, e, s);
+	c2ip_function_take_option(v, e, s);
 	p += l;
       }
       got_info(values,id);
@@ -404,7 +404,7 @@ handle_info_reply(C2IPConnectionValues *values,
     {
       guint l = packet[13];
       gchar *s = g_strndup((const gchar*)&packet[14], l);
-      c2ip_value_set_unit(v, s);
+      c2ip_function_set_unit(v, s);
       g_free(s);
       got_info(values,id);
     }
@@ -415,22 +415,22 @@ handle_info_reply(C2IPConnectionValues *values,
 static gboolean
 request_next_info(C2IPConnectionValues *values)
 {
-  C2IPValue *v;
+  C2IPFunction *v;
   GError *err = 0;
   while(values->pending) {
     guint id;
     guint type;
     guint flags;
     v = values->pending->data;
-    id = c2ip_value_get_id(v);
-    type = c2ip_value_get_value_type(v);
-    flags = c2ip_value_get_flags(v);
+    id = c2ip_function_get_id(v);
+    type = c2ip_function_get_value_type(v);
+    flags = c2ip_function_get_flags(v);
     if (type == C2IP_TYPE_BOOL || type == C2IP_TYPE_ENUM) {
       if (!c2ip_connection_send_option_request(values->conn, id, &err)) {
 	g_warning("Failed to request options: %s", err->message);
 	g_clear_error(&err);
       } else return TRUE;
-    } else if (flags & C2IP_VALUE_FLAG_HAS_INFO) {
+    } else if (flags & C2IP_FUNCTION_FLAG_HAS_INFO) {
       if (!c2ip_connection_send_info_request(values->conn, id, &err)) {
 	g_warning("Failed to request extra info: %s", err->message);
 	g_clear_error(&err);
@@ -447,11 +447,11 @@ request_next_info(C2IPConnectionValues *values)
 static gboolean
 got_info(C2IPConnectionValues *values, guint id)
 {
-  C2IPValue *v;
+  C2IPFunction *v;
   if (values->setup_state != SETUP_GETTING_INFO) return FALSE;
   g_assert (values->pending);
   v = values->pending->data;
-  if (c2ip_value_get_id(v) == id) {
+  if (c2ip_function_get_id(v) == id) {
     values->pending = g_slist_delete_link(values->pending, values->pending);
     return request_next_info(values);
   }
@@ -464,7 +464,7 @@ prepend_value(gpointer key,
 	      gpointer data)
 {
   GSList **list = data;
-  g_assert(IS_C2IP_VALUE(value));
+  g_assert(IS_C2IP_FUNCTION(value));
   *list = g_slist_prepend(*list, value);
   return FALSE;
 }
@@ -512,10 +512,11 @@ c2ip_connection_values_new(C2IPConnection *conn)
   return values;
 }
 
-C2IPValue *
-c2ip_connection_values_get_value(const C2IPConnectionValues *values, guint id)
+C2IPFunction *
+c2ip_connection_values_get_function(const C2IPConnectionValues *values,
+				    guint id)
 {
-  return C2IP_VALUE(g_tree_lookup(values->values, GSIZE_TO_POINTER(id)));
+  return C2IP_FUNCTION(g_tree_lookup(values->values, GSIZE_TO_POINTER(id)));
 }
 
 /**
@@ -527,19 +528,19 @@ c2ip_connection_values_get_value(const C2IPConnectionValues *values, guint id)
 
 struct ValueCB
 {
-  C2IPValueCallback cb;
+  C2IPFunctionCallback cb;
   gpointer data;
 };
 static gboolean
 value_iterate(gpointer key, gpointer value, gpointer data)
 {
   struct ValueCB *c = data;
-  return c->cb(C2IP_VALUE(value), c->data);
+  return c->cb(C2IP_FUNCTION(value), c->data);
 }
 
 void
 c2ip_connection_values_foreach(C2IPConnectionValues *values,
-				C2IPValueCallback cb, gpointer user_data)
+				C2IPFunctionCallback cb, gpointer user_data)
 {
   struct ValueCB c;
   c.cb = cb;
@@ -551,64 +552,4 @@ C2IPDevice *
 c2ip_connection_values_get_device(C2IPConnectionValues *values)
 {
   return values->device;
-}
-
-gboolean
-c2ip_connection_values_change_value(C2IPConnectionValues *values,
-				    guint id, const GValue *gvalue,
-				    GError **err)
-{
-  GValue transformed = G_VALUE_INIT;
-  guint vtype;
-  guint vsize;
-  guint8 vbuffer[255];
-  C2IPValue *v = c2ip_connection_values_get_value(values, id);
-  if (!v) {
-    g_set_error(err,
-		C2IP_CONNECTION_VALUES_ERROR,
-		C2IP_CONNECTION_VALUES_ERROR_INVALID_ID,
-		"No function with ID %d found", id);
-    return FALSE;
-  }
-  g_value_init(&transformed, G_VALUE_TYPE(c2ip_value_get_value(v)));
-  if (!g_value_transform(gvalue, &transformed)) {
-    g_set_error(err,
-		C2IP_CONNECTION_VALUES_ERROR,
-		C2IP_CONNECTION_VALUES_ERROR_INCOMPATIBLE_VALUE,
-		"Incompatible types (%s -> %s)",
-		G_VALUE_TYPE_NAME(gvalue),
-		G_VALUE_TYPE_NAME(c2ip_value_get_value(v)));
-  }
-  vtype = c2ip_value_get_value_type(v);
- 
-  switch(vtype) {
-  case C2IP_TYPE_U8:
-  case C2IP_TYPE_BOOL:
-  case C2IP_TYPE_ENUM:
-    vbuffer[0] = g_value_get_int(&transformed);
-    vsize = 1;
-    break;
-  case C2IP_TYPE_U16:
-  case C2IP_TYPE_U12:
-    C2IP_U16_SET(vbuffer, g_value_get_int(&transformed));
-    vsize = 2;
-    break;
-  case C2IP_TYPE_S16:
-    C2IP_S16_SET(vbuffer, g_value_get_int(&transformed));
-    vsize = 2;
-    break;
-  case C2IP_TYPE_FLOAT16:
-    set_float16(vbuffer, g_value_get_float(&transformed));
-    vsize = 2;
-    break;
-  case C2IP_TYPE_STRING:
-    {
-      const gchar *str =  g_value_get_string(&transformed);
-      vsize = strlen(str);
-      memcpy(vbuffer, str, vsize);
-    }
-  }
-  g_value_unset(&transformed);
-  return c2ip_connection_send_value_change(values->conn, id,
-					   vtype, vsize, vbuffer,err);
 }

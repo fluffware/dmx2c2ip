@@ -111,12 +111,12 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
 }
 
 static void
-change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
+change_c2ip_function(AppContext *app, const gchar *pathstr, const GValue *gvalue)
 {
   C2IPConnection *conn;
   GValue transformed = G_VALUE_INIT;
   C2IPConnectionValues *values;
-  C2IPValue *v;
+  C2IPFunction *v;
   gchar *name = g_alloca(strlen(pathstr));
   gchar *typestr;
   gchar *idstr;
@@ -146,17 +146,17 @@ change_c2ip_value(AppContext *app, const gchar *pathstr, const GValue *gvalue)
   }
   values = C2IP_CONNECTION_VALUES(g_object_get_qdata(G_OBJECT(conn),
 						     values_quark));
-  v = c2ip_connection_values_get_value(values, atoi(idstr));
+  v = c2ip_connection_values_get_function(values, atoi(idstr));
   if (!v) {
     g_warning("No matching ID");
     return;
   }
-  g_value_init(&transformed, G_VALUE_TYPE(c2ip_value_get_value(v)));
+  g_value_init(&transformed, G_VALUE_TYPE(c2ip_function_get_value(v)));
   if (!g_value_transform(gvalue, &transformed)) {
     g_value_unset(&transformed);
     return;
   }
-  c2ip_value_set_value(v, &transformed);
+  c2ip_function_set_value(v, &transformed);
   g_value_unset(&transformed);
   g_debug("Changing value %d %s %s", type, name, idstr);
 }
@@ -172,7 +172,7 @@ http_value_changed(HTTPServer *server, GQuark path, const GValue *value,
   g_free(vstr);
 #endif
   if (g_str_has_prefix(pathstr, "functions/values/")) {
-    change_c2ip_value(app, &pathstr[17], value);
+    change_c2ip_function(app, &pathstr[17], value);
   } else {
     g_warning("Unhandled value from HTTP server: %s", pathstr);
   }
@@ -280,7 +280,7 @@ static gboolean
 print_value(C2IPValue *value, gpointer user_data)
 {
   gchar *str;
-  C2IPDevice *dev = c2ip_value_get_device(value);
+  C2IPDevice *dev = c2ip_function_get_device(value);
   switch(c2ip_device_get_device_type(dev)) {
   case C2IP_DEVICE_CAMERA_HEAD:
     fputs("Camera ",stdout);
@@ -296,9 +296,9 @@ print_value(C2IPValue *value, gpointer user_data)
   fprintf(stdout, "%s \"%s\" ", c2ip_device_get_device_name(dev),
 	  c2ip_string_map_default(c2ip_funtion_name_map,
 				  c2ip_funtion_name_map_length,
-				  c2ip_value_get_id(value),
+				  c2ip_function_get_id(value),
 				  "?"));
-  str = c2ip_value_to_string(value);
+  str = c2ip_function_to_string(value);
   fputs(str,stdout);
   fputc('\n', stdout);
   fflush(stdout);
@@ -312,7 +312,7 @@ struct ExportOptions
   GString *path;
   gsize prefix_len;
   HTTPServer *server;
-  C2IPValue *value;
+  C2IPFunction *value;
 };
 
 static gboolean
@@ -328,7 +328,7 @@ export_option(guint n, const gchar *name,
 }
 
 static void
-export_options(C2IPValue *value, GString *path, AppContext *app)
+export_options(C2IPFunction *value, GString *path, AppContext *app)
 {
   gssize prefix_len = path->len;
   struct ExportOptions export;
@@ -337,14 +337,14 @@ export_options(C2IPValue *value, GString *path, AppContext *app)
   export.path = path;
   export.server = app->http_server;
   export.value = value;
-  c2ip_value_options_foreach(value, export_option, &export);
+  c2ip_function_options_foreach(value, export_option, &export);
   g_string_truncate(path, prefix_len);
 }
 
 static void
-export_mapping(AppContext *app, C2IPValue *value)
+export_mapping(AppContext *app, C2IPFunction *value)
 {
-  guint vtype = c2ip_value_get_value_type(value);
+  guint vtype = c2ip_function_get_value_type(value);
   gfloat min;
   gfloat max;
   gboolean map = TRUE;
@@ -370,10 +370,10 @@ export_mapping(AppContext *app, C2IPValue *value)
   }
   if (map) {
     guint prefix_len;
-    C2IPDevice *dev = c2ip_value_get_device(value);
+    C2IPDevice *dev = c2ip_function_get_device(value);
     GString *str = g_string_new("dmxmap/");
     append_device_path(str, dev);
-    g_string_append_printf(str, "/%d/", c2ip_value_get_id(value));
+    g_string_append_printf(str, "/%d/", c2ip_function_get_id(value));
     prefix_len = str->len;
     g_string_append(str, "channel");
     http_server_set_int(app->http_server, str->str, 0, NULL);
@@ -389,15 +389,15 @@ export_mapping(AppContext *app, C2IPValue *value)
 
 /* Export a value too the world through the web server */
 static gboolean
-export_value(C2IPValue *value, gpointer user_data)
+export_value(C2IPFunction *value, gpointer user_data)
 {
   gsize prefix_len;
   AppContext *app = user_data;
   GString *str = g_string_new("functions/values/");
-  C2IPDevice *dev = c2ip_value_get_device(value);
-  guint vtype = c2ip_value_get_value_type(value);
+  C2IPDevice *dev = c2ip_function_get_device(value);
+  guint vtype = c2ip_function_get_value_type(value);
   append_device_path(str, dev);
-  g_string_append_printf(str, "/%d", c2ip_value_get_id(value));
+  g_string_append_printf(str, "/%d", c2ip_function_get_id(value));
   switch(vtype) {
   case C2IP_TYPE_U8:
   case C2IP_TYPE_U12:
@@ -406,36 +406,36 @@ export_value(C2IPValue *value, gpointer user_data)
   case C2IP_TYPE_ENUM:
   case C2IP_TYPE_BOOL:
     http_server_set_int(app->http_server, str->str,
-			g_value_get_int(c2ip_value_get_value(value)) , NULL);
+			g_value_get_int(c2ip_function_get_value(value)) , NULL);
     break;
   case C2IP_TYPE_STRING:
     http_server_set_string(app->http_server, str->str,
-			   g_value_get_string(c2ip_value_get_value(value)) ,
+			   g_value_get_string(c2ip_function_get_value(value)) ,
 			   NULL);
     break;
   case C2IP_TYPE_FLOAT16:
     http_server_set_double(app->http_server, str->str,
-			   g_value_get_float(c2ip_value_get_value(value)) ,
+			   g_value_get_float(c2ip_function_get_value(value)) ,
 			   NULL);
     break;
   }
   g_string_assign(str, "functions/attributes/");
   append_device_path(str, dev);
-  g_string_append_printf(str, "/%d/", c2ip_value_get_id(value));
+  g_string_append_printf(str, "/%d/", c2ip_function_get_id(value));
   prefix_len = str->len;
   g_string_append(str, "type");
   http_server_set_string(app->http_server, str->str,
-			 c2ip_value_get_value_type_string(value), NULL);
+			 c2ip_function_get_value_type_string(value), NULL);
   g_string_truncate(str, prefix_len);
   g_string_append(str, "name");
   http_server_set_string(app->http_server, str->str,
-			 c2ip_value_get_name(value), NULL);
+			 c2ip_function_get_name(value), NULL);
   g_string_truncate(str, prefix_len);
   
-  if (c2ip_value_get_unit(value)) {
+  if (c2ip_function_get_unit(value)) {
     g_string_append(str, "unit");
     http_server_set_string(app->http_server, str->str,
-			   c2ip_value_get_unit(value), NULL);
+			   c2ip_function_get_unit(value), NULL);
     g_string_truncate(str, prefix_len);
   }
   export_options(value, str, app);
@@ -454,7 +454,7 @@ values_ready(C2IPConnectionValues *values, AppContext *app)
 }
 
 static void
-c2ip_value_changed(C2IPConnectionValues *values, C2IPValue *value, AppContext *app)
+c2ip_function_changed(C2IPConnectionValues *values, C2IPFunction *value, AppContext *app)
 {
   export_value(value, app);
 }
@@ -475,7 +475,7 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_typ
    g_signal_connect(values, "values-ready",
 		   (GCallback)values_ready, app);
    g_signal_connect(values, "value-changed",
-		   (GCallback)c2ip_value_changed, app);
+		   (GCallback)c2ip_function_changed, app);
   
   g_debug("New connection");
 }

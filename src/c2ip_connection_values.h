@@ -3,7 +3,7 @@
 
 #include <glib-object.h>
 #include <c2ip_connection.h>
-#include <c2ip_value.h>
+#include <c2ip_function.h>
 
 #define C2IP_CONNECTION_VALUES_ERROR (c2ip_connection_values_error_quark())
 enum {
@@ -28,22 +28,23 @@ c2ip_connection_values_get_type(void);
 C2IPConnectionValues *
 c2ip_connection_values_new(C2IPConnection *conn);
 
-C2IPValue *
-c2ip_connection_values_get_value(const C2IPConnectionValues *values, guint id);
+C2IPFunction *
+c2ip_connection_values_get_function(const C2IPConnectionValues *values,
+				    guint id);
 
 /**
- * C2IPValueCallback:
+ * C2IPFunctionCallback:
  * @value:
  * @user_data: as supplied in c2ip_connection_values_for_each
  *
  * Returns: FALSE if the iteration should continue or TRUE to stop
  **/
 
-typedef gboolean (*C2IPValueCallback)(C2IPValue *value, gpointer user_data);
+typedef gboolean (*C2IPFunctionCallback)(C2IPFunction *func, gpointer user_data);
 
 void
 c2ip_connection_values_foreach(C2IPConnectionValues *values,
-				C2IPValueCallback cb, gpointer user_data);
+			       C2IPFunctionCallback cb, gpointer user_data);
 
 C2IPDevice *
 c2ip_connection_values_get_device(C2IPConnectionValues *values);

@@ -25,7 +25,7 @@ struct _MapEntry
   gint func_id;
   gfloat min;
   gfloat max;
-  C2IPValue *value;
+  C2IPFunction *function;
 };
 
 struct _DMXC2IPMapper
@@ -54,8 +54,9 @@ static void
 free_entry(gpointer p)
 {
   MapEntry *e = p;
-  if (e->value) {
-    g_object_remove_weak_pointer(G_OBJECT(e->value), (gpointer*)&e->value);
+  if (e->function) {
+    g_object_remove_weak_pointer(G_OBJECT(e->function),
+				 (gpointer*)&e->function);
   }
   g_free(e->dev_name);
   g_free(e);
@@ -158,7 +159,7 @@ dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
   new_entry->dev_type = type;
   new_entry->dev_name = g_strdup(name);
   new_entry->func_id = id;
-  new_entry->value = NULL;
+  new_entry->function = NULL;
 
   e = g_tree_lookup(mapper->function_map, new_entry);
   if (e) {
@@ -173,7 +174,7 @@ dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
     g_sequence_sort(mapper->channel_map, map_cmp, NULL);
   } else {
     new_entry->channel = channel;
-    new_entry->value = NULL;
+    new_entry->function = NULL;
     new_entry->min = min;
     new_entry->max = max;
     g_sequence_insert_sorted(mapper->channel_map, new_entry, map_cmp, NULL);
@@ -239,11 +240,11 @@ dmx_c2ip_mapper_remove_map_channel(DMXC2IPMapper *mapper, guint channel)
 static gboolean
 set_function(MapEntry *e, guint value, GError **err)
 {
-  if (e->value) {
+  if (e->function) {
     GValue v = G_VALUE_INIT;
     GValue transformed = G_VALUE_INIT;
     g_value_init(&v, G_TYPE_FLOAT);
-    g_value_init(&v, G_VALUE_TYPE(c2ip_value_get_value(e->value)));
+    g_value_init(&v, G_VALUE_TYPE(c2ip_function_get_value(e->function)));
     if (value > 255) value = 255;
     g_value_set_float(&v, e->min + value * (e->max - e->min) / 255);
     if (!g_value_transform(&v, &transformed)) {
