@@ -460,6 +460,10 @@ export_mapping(AppContext *app, C2IPFunction *value)
     min = -32768.0;
     max = 32767;
     break;
+  case C2IP_TYPE_FLOAT16:
+    min = 0.0;
+    max = 1.0;
+    break;
   default:
     map = FALSE;
   }
