@@ -359,16 +359,23 @@ set_function(MapEntry *e, guint value, GError **err)
     GValue v = G_VALUE_INIT;
     GValue transformed = G_VALUE_INIT;
     g_value_init(&v, G_TYPE_FLOAT);
-    g_value_init(&v, G_VALUE_TYPE(c2ip_function_get_value(e->function)));
     if (value > 255) value = 255;
     g_value_set_float(&v, e->min + value * (e->max - e->min) / 255);
+    g_value_init(&transformed,
+		 G_VALUE_TYPE(c2ip_function_get_value(e->function)));
     if (!g_value_transform(&v, &transformed)) {
       g_set_error(err, DMX_C2IP_MAPPER_ERROR,
 		  DMX_C2IP_MAPPER_ERROR_INCOMPATIBLE_VALUE,
 		  "Can't convert DMX value to %s",
 		  G_VALUE_TYPE_NAME(&transformed));
-	return FALSE;
+      g_value_unset(&v);
+      g_value_unset(&transformed);
+      return FALSE;
     }
+    g_value_unset(&v);
+
+    c2ip_function_set_value(e->function, &transformed);
+    g_value_unset(&transformed);
   }
   return TRUE;
 }
