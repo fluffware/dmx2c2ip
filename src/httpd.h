@@ -31,17 +31,35 @@ http_server_start(HTTPServer *server, GError **err);
 GQuark
 http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_value, GError **err);
 
+gboolean
+http_server_get_value(HTTPServer *server, const gchar *path, GValue *value, GError **err);
+
 GQuark
 http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value, GError **err);
+
+gboolean
+http_server_get_boolean(HTTPServer *server,
+			const gchar *path, gboolean *value, GError **err);
 
 GQuark
 http_server_set_int(HTTPServer *server, const gchar *path, gint64 value, GError **err);
 
+gboolean
+http_server_get_int(HTTPServer *server,
+		    const gchar *path, gint64 *value, GError **err);
+
 GQuark
 http_server_set_double(HTTPServer *server, const gchar *path, gdouble value, GError **err);
 
+gboolean
+http_server_get_double(HTTPServer *server,
+		       const gchar *path, double *value, GError **err);
+
 GQuark
 http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str, GError **err);
+
+gchar *
+http_server_get_string(HTTPServer *server, const gchar *path, GError **err);
 
 gboolean
 http_server_remove(HTTPServer *server, const gchar *path, GError **err);

@@ -1,4 +1,5 @@
 #include "dmx_c2ip_mapper.h"
+#include "dmx_c2ip_mapper_marshal.h"
 #include <string.h>
 
 GQuark
@@ -9,6 +10,14 @@ dmx_c2ip_mapper_error_quark()
     error_quark = g_quark_from_static_string ("dmx-c2ip-mapper-error-quark");
   return error_quark;
 }
+
+enum {
+  MAPPING_CHANGED,
+  MAPPING_REMOVED,
+  LAST_SIGNAL
+};
+
+static guint dmx_c2ip_mapper_signals[LAST_SIGNAL] = {0 };
 
 enum
 {
@@ -46,6 +55,13 @@ struct _DMXC2IPMapperClass
   /* class members */
 
   /* Signals */
+  
+  /* Also used for new mappings*/
+  void (*mapping_changed)(DMXC2IPMapper *mapper, guint channel, guint dev_type,
+			  const gchar *dev_name, guint func_id);
+  
+  void (*mapping_removed)(DMXC2IPMapper *mapper, guint channel, guint dev_type,
+			  const gchar *dev_name, guint func_id);
 };
 
 G_DEFINE_TYPE (DMXC2IPMapper, dmx_c2ip_mapper, G_TYPE_OBJECT)
@@ -95,6 +111,25 @@ dmx_c2ip_mapper_class_init (DMXC2IPMapperClass *klass)
   gobject_class->dispose = dispose;
   gobject_class->finalize = finalize;
   channel_quark = g_quark_from_static_string("dmx-c2ip-mapper-channel");
+
+  dmx_c2ip_mapper_signals[MAPPING_CHANGED] =
+    g_signal_new("mapping-changed",
+		 G_OBJECT_CLASS_TYPE (gobject_class),
+		 G_SIGNAL_RUN_LAST,
+		 G_STRUCT_OFFSET(DMXC2IPMapperClass, mapping_changed),
+		 NULL, NULL,
+		 dmx_c2ip_mapper_marshal_VOID__UINT_UINT_STRING_UINT,
+		 G_TYPE_NONE, 4,
+		 G_TYPE_UINT, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT);
+  dmx_c2ip_mapper_signals[MAPPING_REMOVED] =
+    g_signal_new("mapping-removed",
+		 G_OBJECT_CLASS_TYPE (gobject_class),
+		 G_SIGNAL_RUN_LAST,
+		 G_STRUCT_OFFSET(DMXC2IPMapperClass, mapping_removed),
+		 NULL, NULL,
+		 dmx_c2ip_mapper_marshal_VOID__UINT_UINT_STRING_UINT,
+		 G_TYPE_NONE, 4,
+		 G_TYPE_UINT, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_UINT);
 }
 
 static gint
@@ -149,10 +184,10 @@ dmx_c2ip_mapper_new(sqlite3 *db, const gchar *table, GError **err)
   return mapper;
 }
 
-gboolean
-dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
-			guint type, const gchar *name, guint id,
-			gfloat min, gfloat max, GError **err)
+MapEntry *
+add_entry(DMXC2IPMapper *mapper, guint channel,
+	  guint type, const gchar *name, guint id,
+	  gfloat min, gfloat max)
 {
   MapEntry *e;
   MapEntry *new_entry = g_new(MapEntry, 1);
@@ -166,12 +201,17 @@ dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
     /* Function already mapped to another channel. Just change the
        channel and update limits. */
     free_entry(new_entry);
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
+		  e->channel, type, name, id);
     g_tree_remove(mapper->function_map, e);
     e->channel = channel;
     e->min = min;
     e->max = max;
     g_tree_insert(mapper->function_map, e, e);
     g_sequence_sort(mapper->channel_map, map_cmp, NULL);
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		  channel, type, name, id);
+    return e;
   } else {
     new_entry->channel = channel;
     new_entry->function = NULL;
@@ -179,13 +219,80 @@ dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
     new_entry->max = max;
     g_sequence_insert_sorted(mapper->channel_map, new_entry, map_cmp, NULL);
     g_tree_insert(mapper->function_map, new_entry, new_entry);
-  }
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		  channel, type, name, id);
+    return new_entry;
+  } 
+}
+
+gboolean
+dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
+			guint type, const gchar *name, guint id,
+			gfloat min, gfloat max, GError **err)
+{
+  add_entry(mapper, channel, type, name, id, min, max);
   return TRUE;
 }
 
 gboolean
-dmx_c2ip_mapper_remove_map_func(DMXC2IPMapper *mapper,
-				guint type, const gchar *name, guint id)
+dmx_c2ip_mapper_add_map_function(DMXC2IPMapper *mapper, guint channel,
+				 C2IPFunction *func,
+				 gfloat min, gfloat max, GError **err)
+{
+  C2IPDevice *dev = c2ip_function_get_device(func);
+  MapEntry *e = add_entry(mapper, channel,
+			  c2ip_device_get_device_type(dev),
+			  c2ip_device_get_device_name(dev),
+			  c2ip_function_get_id(func),
+			  min, max);
+  if (e->function) {
+    g_object_remove_weak_pointer(G_OBJECT(e->function),
+				 (gpointer*)&e->function);
+    e->function = NULL;
+  }
+  e->function = func;
+  g_object_add_weak_pointer(G_OBJECT(e->function), (gpointer*)&e->function);
+  return TRUE;
+}
+
+/**
+ * dmx_c2ip_mapper_bind_function:
+ * @mapper
+ * @func: function to bind
+ * @err
+ *
+ * If there is a mapping to @func, but it's not already bound to a
+ * live function. Then this function will bind it. Use this when a new
+ * connection is made and functions become available.
+ *
+ * Returns: TRUE if no error.
+ **/
+
+gboolean
+dmx_c2ip_mapper_bind_function(DMXC2IPMapper *mapper,
+			      C2IPFunction *func,
+			      GError **err)
+{
+  MapEntry *e;
+  MapEntry key;
+  key.dev_type = c2ip_function_get_value_type(func);
+  key.dev_name = (gchar*)c2ip_function_get_name(func);
+  key.func_id = c2ip_function_get_id(func);
+  e = g_tree_lookup(mapper->function_map, &key);
+  if (e) {
+    if (!e->function) {
+      e->function = func;
+      g_object_add_weak_pointer(G_OBJECT(e->function), (gpointer*)&e->function);
+    }
+  }
+  return TRUE;
+}
+
+
+
+gboolean
+dmx_c2ip_mapper_remove_func(DMXC2IPMapper *mapper,
+			    guint type, const gchar *name, guint id)
 {
   MapEntry *e;
   MapEntry key;
@@ -195,6 +302,8 @@ dmx_c2ip_mapper_remove_map_func(DMXC2IPMapper *mapper,
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
     GSequenceIter *iter;
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
+		  e->channel, type, name, id);
     g_tree_remove(mapper->function_map, e);
     iter = g_sequence_lookup(mapper->channel_map, e, map_cmp, NULL);
     g_sequence_remove(iter);
@@ -204,7 +313,7 @@ dmx_c2ip_mapper_remove_map_func(DMXC2IPMapper *mapper,
 }
 
 gboolean
-dmx_c2ip_mapper_remove_map_channel(DMXC2IPMapper *mapper, guint channel)
+dmx_c2ip_mapper_remove_channel(DMXC2IPMapper *mapper, guint channel)
 {
   MapEntry key;
   GSequenceIter *iter;
@@ -219,6 +328,9 @@ dmx_c2ip_mapper_remove_map_channel(DMXC2IPMapper *mapper, guint channel)
 	GSequenceIter *prev = g_sequence_iter_prev(i);
 	e = g_sequence_get(i);
 	if (e->channel != channel) break;
+	g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
+		      e->channel, e->dev_type, e->dev_name, e->func_id);
+	g_tree_remove(mapper->function_map, e);
 	g_sequence_remove(i);
 	i = prev;
       }
@@ -228,6 +340,9 @@ dmx_c2ip_mapper_remove_map_channel(DMXC2IPMapper *mapper, guint channel)
       GSequenceIter *next = g_sequence_iter_next(i);
       e = g_sequence_get(i);
       if (e->channel != channel) break;
+      g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
+		    e->channel, e->dev_type, e->dev_name, e->func_id);
+      g_tree_remove(mapper->function_map, e);
       g_sequence_remove(i);
       i = next;
     }
@@ -290,3 +405,61 @@ dmx_c2ip_mapper_set_channel(DMXC2IPMapper *mapper,
 }
 
 
+gboolean
+dmx_c2ip_mapper_get_minmax(DMXC2IPMapper *mapper,
+			   guint dev_type, const gchar *dev_name, guint func_id,
+			   gfloat *min, gfloat *max)
+{
+  MapEntry *e;
+  MapEntry key;
+  key.dev_type = dev_type;
+  key.dev_name = (gchar*)dev_name;
+  key.func_id = func_id;
+  e = g_tree_lookup(mapper->function_map, &key);
+  if (e) {
+    *min = e->min;
+    *max = e->max;
+    return TRUE;
+  }
+  return FALSE;
+}
+
+gboolean
+dmx_c2ip_mapper_set_min(DMXC2IPMapper *mapper,
+			guint dev_type, const gchar *dev_name, guint func_id,
+			gfloat min)
+{
+  MapEntry *e;
+  MapEntry key;
+  key.dev_type = dev_type;
+  key.dev_name = (gchar*)dev_name;
+  key.func_id = func_id;
+  e = g_tree_lookup(mapper->function_map, &key);
+  if (e) {
+    e->min = min;
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		  e->channel, e->dev_type, e->dev_name, e->func_id);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+gboolean
+dmx_c2ip_mapper_set_max(DMXC2IPMapper *mapper,
+			guint dev_type, const gchar *dev_name, guint func_id,
+			gfloat max)
+{
+  MapEntry *e;
+  MapEntry key;
+  key.dev_type = dev_type;
+  key.dev_name = (gchar*)dev_name;
+  key.func_id = func_id;
+  e = g_tree_lookup(mapper->function_map, &key);
+  if (e) {
+    e->max = max;
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		  e->channel, e->dev_type, e->dev_name, e->func_id);
+    return TRUE;
+  }
+  return FALSE;
+}

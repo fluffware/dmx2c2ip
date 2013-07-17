@@ -1,5 +1,5 @@
 
-AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@
+AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@ -Wno-long-long
 
 noinst_PROGRAMS = dmx_send
 bin_PROGRAMS = dmx2c2ip c2ip_tool
@@ -18,7 +18,8 @@ c2ip_function.c c2ip_function.h \
 c2ip_device.c c2ip_device.h \
 c2ip_strings.c c2ip_strings.h \
 sqlite/sqlite3.c sqlite/sqlite3.h \
-dmx_c2ip_mapper.c dmx_c2ip_mapper.h
+dmx_c2ip_mapper.c dmx_c2ip_mapper.h \
+dmx_c2ip_mapper_marshal.c dmx_c2ip_mapper_marshal.h
 
 
 dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ -lm
@@ -45,4 +46,5 @@ c2ip_tool_LDADD= @GLIB_LIBS@ -lreadline
 
 BUILT_SOURCES =  c2ip_scan_marshal.c c2ip_scan_marshal.h \
 c2ip_connection_values_marshal.c c2ip_connection_values_marshal.h \
-c2ip_connection_manager_marshal.c c2ip_connection_manager_marshal.h
+c2ip_connection_manager_marshal.c c2ip_connection_manager_marshal.h \
+dmx_c2ip_mapper_marshal.c dmx_c2ip_mapper_marshal.h

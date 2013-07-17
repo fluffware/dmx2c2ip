@@ -680,6 +680,25 @@ http_server_set_value(HTTPServer *server, const gchar *path, const GValue *new_v
   return res;
 }
 
+gboolean
+http_server_get_value(HTTPServer *server, const gchar *path, GValue *value, GError **err)
+{
+  gboolean res = FALSE;
+  JsonNode *node;
+  g_rw_lock_reader_lock(&server->value_lock);
+  node = get_node(server, path, err);
+  if (node) {
+    if (JSON_NODE_HOLDS_VALUE(node)) {
+      json_node_get_value(node, value);
+      res = TRUE;
+    }
+  }
+  g_rw_lock_reader_unlock(&server->value_lock);
+  return res;
+}
+
+
+
 GQuark
 http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value,
 			GError **err)
@@ -690,6 +709,24 @@ http_server_set_boolean(HTTPServer *server, const gchar *path, gboolean value,
   g_value_set_boolean(&v, value);
   res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
+  return res;
+}
+
+gboolean
+http_server_get_boolean(HTTPServer *server,
+			const gchar *path, gboolean *value, GError **err)
+{
+  gboolean res = FALSE;
+  JsonNode *node;
+  g_rw_lock_reader_lock(&server->value_lock);
+  node = get_node(server, path, err);
+  if (node) {
+    if (JSON_NODE_HOLDS_VALUE(node)) {
+      *value = json_node_get_boolean(node);
+      res = TRUE;
+    }
+  }
+  g_rw_lock_reader_unlock(&server->value_lock);
   return res;
 }
 
@@ -706,6 +743,24 @@ http_server_set_int(HTTPServer *server, const gchar *path, gint64 value,
   return res;
 }
 
+gboolean
+http_server_get_int(HTTPServer *server,
+			const gchar *path, gint64 *value, GError **err)
+{
+  gboolean res = FALSE;
+  JsonNode *node;
+  g_rw_lock_reader_lock(&server->value_lock);
+  node = get_node(server, path, err);
+  if (node) {
+    if (JSON_NODE_HOLDS_VALUE(node)) {
+      *value = json_node_get_int(node);
+      res = TRUE;
+    }
+  }
+  g_rw_lock_reader_unlock(&server->value_lock);
+  return res;
+}
+
 GQuark
 http_server_set_double(HTTPServer *server, const gchar *path, gdouble value,
 			GError **err)
@@ -716,6 +771,24 @@ http_server_set_double(HTTPServer *server, const gchar *path, gdouble value,
   g_value_set_double(&v, value);
   res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
+  return res;
+}
+
+gboolean
+http_server_get_double(HTTPServer *server,
+		       const gchar *path, double *value, GError **err)
+{
+  gboolean res = FALSE;
+  JsonNode *node;
+  g_rw_lock_reader_lock(&server->value_lock);
+  node = get_node(server, path, err);
+  if (node) {
+    if (JSON_NODE_HOLDS_VALUE(node)) {
+      *value = json_node_get_double(node);
+      res = TRUE;
+    }
+  }
+  g_rw_lock_reader_unlock(&server->value_lock);
   return res;
 }
 
@@ -730,6 +803,23 @@ http_server_set_string(HTTPServer *server, const gchar *path, const gchar *str,
   res = http_server_set_value(server, path, &v, err);
   g_value_unset(&v);
   return res; 
+}
+
+gchar *
+http_server_get_string(HTTPServer *server,
+		       const gchar *path, GError **err)
+{
+  gchar *str = NULL;
+  JsonNode *node;
+  g_rw_lock_reader_lock(&server->value_lock);
+  node = get_node(server, path, err);
+  if (node) {
+    if (JSON_NODE_HOLDS_VALUE(node)) {
+      str = g_strdup(json_node_get_string(node));
+    }
+  }
+  g_rw_lock_reader_unlock(&server->value_lock);
+  return str;
 }
 
 static int

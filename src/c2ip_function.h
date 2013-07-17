@@ -11,6 +11,9 @@
 GType
 c2ip_function_type_enum_get_type(void);
 
+GType
+c2ip_function_flags_get_type(void);
+
 #define C2IP_FUNCTION_TYPE                  (c2ip_function_get_type ())
 #define C2IP_FUNCTION(obj)                  (G_TYPE_CHECK_INSTANCE_CAST ((obj), C2IP_FUNCTION_TYPE, C2IPFunction))
 #define IS_C2IP_FUNCTION(obj)               (G_TYPE_CHECK_INSTANCE_TYPE ((obj), C2IP_FUNCTION_TYPE))

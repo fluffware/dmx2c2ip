@@ -1,6 +1,58 @@
 #include "c2ip_device.h"
 #include "c2ip.h"
+
+typedef struct _C2IPDeviceTypeEnumClass C2IPDeviceTypeEnumClass;
+struct _C2IPDeviceTypeEnumClass
+{
+  GEnumClass enum_class;
+};
+
+static const GEnumValue device_types[] =
+  {
+    {0, "none", "No device"},
+    {C2IP_DEVICE_BASE_STATION, "base", "Base station"},
+    {C2IP_DEVICE_CAMERA_HEAD, "camera", "Camera head"},
+    {C2IP_DEVICE_OCP, "OCP", "OCP"},
+  };
+
+static void
+c2ip_device_type_enum_class_init(gpointer g_class,
+				gpointer class_data)
+{
+  C2IPDeviceTypeEnumClass *type_class = g_class;
+  type_class->enum_class.minimum = 0;
+  type_class->enum_class.maximum = 255;
+  type_class->enum_class.n_values =sizeof(device_types)/sizeof(device_types[0]);
+  type_class->enum_class.values = (GEnumValue*)device_types;
   
+}
+
+static const GTypeInfo value_type_enum_info =
+{
+  sizeof(C2IPDeviceTypeEnumClass),
+  NULL,
+  NULL,
+  c2ip_device_type_enum_class_init,
+  NULL,
+  NULL,
+  0,
+  0,
+  NULL,
+  NULL
+};
+
+GType
+c2ip_device_type_enum_get_type(void)
+{
+  static GType type = 0;
+  if (!type) {
+    type = g_type_register_static(G_TYPE_ENUM, "C2IPDeviceTypeEnum",
+				  &value_type_enum_info, 0);
+  }
+  return type;
+}
+
+
 enum
 {
   PROP_0 = 0,
@@ -59,7 +111,7 @@ set_property (GObject *object, guint property_id,
   switch (property_id)
     {
     case PROP_DEVICE_TYPE:
-      dev->device_type = g_value_get_uint(gvalue);
+      dev->device_type = g_value_get_enum(gvalue);
       break;
     case PROP_DEVICE_NAME:
       g_free(dev->device_name);
@@ -87,7 +139,7 @@ get_property (GObject *object, guint property_id,
   C2IPDevice *dev = C2IP_DEVICE(object); 
   switch (property_id) {
   case PROP_DEVICE_TYPE:
-    g_value_set_uint(gvalue,dev->device_type);
+    g_value_set_enum(gvalue,dev->device_type);
     break;
   case PROP_DEVICE_NAME:
     g_value_set_string(gvalue,dev->device_name);
@@ -120,9 +172,10 @@ c2ip_device_class_init (C2IPDeviceClass *klass)
   
   properties[0] = NULL;
   properties[PROP_DEVICE_TYPE] =
-    g_param_spec_uint("device-type", "Device type",
+    g_param_spec_enum("device-type", "Device type",
 		      "Device type",
-		      0, 10, 0,
+		      C2IP_DEVICE_TYPE_ENUM_TYPE,
+		      0,
 		      G_PARAM_READABLE |G_PARAM_STATIC_STRINGS);
   properties[PROP_DEVICE_NAME] =
     g_param_spec_string("device-name", "Device name",

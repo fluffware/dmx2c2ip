@@ -1,5 +1,9 @@
 #include <glib-object.h>
 
+#define C2IP_DEVICE_TYPE_ENUM_TYPE (c2ip_device_type_enum_get_type())
+GType
+c2ip_device_type_enum_get_type(void);
+
 #define C2IP_DEVICE_TYPE                  (c2ip_device_get_type ())
 #define C2IP_DEVICE(obj)                  (G_TYPE_CHECK_INSTANCE_CAST ((obj), C2IP_DEVICE_TYPE, C2IPDevice))
 #define IS_C2IP_DEVICE(obj)               (G_TYPE_CHECK_INSTANCE_TYPE ((obj), C2IP_DEVICE_TYPE))

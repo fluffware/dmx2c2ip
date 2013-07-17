@@ -74,25 +74,31 @@ app_cleanup(AppContext* app)
   g_free(app->dmx_device);
 }
 
+static const gchar *
+device_type_to_string(guint type)
+{
+  GEnumValue *v =
+    g_enum_get_value(g_type_class_peek(C2IP_DEVICE_TYPE_ENUM_TYPE), type);
+  if (!v) return "unknown";
+  return v->value_name;
+}
+
+static guint
+string_to_device_type(const gchar *str)
+{
+  GEnumValue *v =
+    g_enum_get_value_by_name(g_type_class_peek(C2IP_DEVICE_TYPE_ENUM_TYPE),str);
+  if (!v) return 0;
+  return v->value;
+}
+
+
 static void
 append_device_path(GString *str, const C2IPDevice *dev)
 {
   g_string_append(str,  c2ip_device_get_device_name(dev));
   g_string_append_c(str, '/');
-  switch(c2ip_device_get_device_type(dev)) {
-  case C2IP_DEVICE_BASE_STATION:
-    g_string_append(str, "base");
-    break;
-  case C2IP_DEVICE_CAMERA_HEAD:
-    g_string_append(str, "camera");
-    break;
-  case C2IP_DEVICE_OCP:
-    g_string_append(str, "OCP");
-    break;
-  default:
-    g_string_append(str, "unknown");
-    break;
-  }
+  g_string_append(str, device_type_to_string(c2ip_device_get_device_type(dev)));
 }
 
 static void
@@ -110,43 +116,54 @@ configure_string_property(void *obj, const gchar *property, GKeyFile *config,
   g_free(str);
 }
 
-static void
-change_c2ip_function(AppContext *app, const gchar *pathstr, const GValue *gvalue)
+static gboolean
+parse_device_path(gchar **p, guint *type, gchar **namep)
+{
+  gchar *name = *p;
+  gchar *typestr;
+  gchar *end;
+  typestr = index(name, '/');
+  if (typestr == NULL || typestr == name) return FALSE;
+  *typestr++ = '\0';
+  end = index(typestr, '/');
+  if (end == NULL || typestr == end) return FALSE;
+  *end++ = '\0';
+  *type = string_to_device_type(typestr);
+  if (!*type) return FALSE;
+  *namep = name;
+  *p = end;
+  return TRUE;
+}
+
+static C2IPConnectionValues *
+get_values(AppContext *app, guint type, const gchar *name)
 {
   C2IPConnection *conn;
-  GValue transformed = G_VALUE_INIT;
-  C2IPConnectionValues *values;
-  C2IPFunction *v;
-  gchar *name = g_alloca(strlen(pathstr));
-  gchar *typestr;
-  gchar *idstr;
-  guint type;
-  strcpy(name, pathstr);
-  typestr = index(name, '/');
-  if (typestr == NULL || typestr == name) return;
-  *typestr++ = '\0';
-  idstr = index(typestr, '/');
-  if (idstr == NULL || typestr == idstr) return;
-  *idstr++ = '\0';
-  if (strcmp(typestr, "base") == 0) {
-    type = C2IP_DEVICE_BASE_STATION;
-  } else if (strcmp(typestr, "camera") == 0) {
-    type = C2IP_DEVICE_CAMERA_HEAD;
-  } else if (strcmp(typestr, "OCP") == 0) {
-    type = C2IP_DEVICE_OCP;
-  } else {
-    return;
-  }
-
   conn = c2ip_connection_manager_get_connection(app->c2ip_connection_manager,
 						type, name);
   if (!conn) {
     g_warning("No matching device found when changing value");
-    return;
+    return NULL;
   }
-  values = C2IP_CONNECTION_VALUES(g_object_get_qdata(G_OBJECT(conn),
-						     values_quark));
-  v = c2ip_connection_values_get_function(values, atoi(idstr));
+  return C2IP_CONNECTION_VALUES(g_object_get_qdata(G_OBJECT(conn),
+						   values_quark));
+}
+  
+static void
+change_c2ip_function(AppContext *app, const gchar *pathstr, const GValue *gvalue)
+{
+  GValue transformed = G_VALUE_INIT;
+  C2IPConnectionValues *values;
+  C2IPFunction *v;
+  guint type;
+  gchar *name;
+  gchar *p = g_alloca(strlen(pathstr));
+  strcpy(p, pathstr);
+  if (!parse_device_path(&p, &type, &name)) return;
+
+  values = get_values(app, type, name);
+  if (!values) return;
+  v = c2ip_connection_values_get_function(values, atoi(p));
   if (!v) {
     g_warning("No matching ID");
     return;
@@ -158,7 +175,86 @@ change_c2ip_function(AppContext *app, const gchar *pathstr, const GValue *gvalue
   }
   c2ip_function_set_value(v, &transformed);
   g_value_unset(&transformed);
-  g_debug("Changing value %d %s %s", type, name, idstr);
+  g_debug("Changing value %d %s %s", type, name, p);
+}
+
+gfloat
+get_http_float_device(HTTPServer *server,
+		      const gchar *prefix, const gchar *suffix,
+		      const C2IPDevice *device, guint id, GError **err)
+{
+  double v;
+  GString *str;
+  str = g_string_new(prefix);
+  append_device_path(str, device);
+  g_string_append_printf(str, "/%d/", id);
+  g_string_append(str, suffix);
+  http_server_get_double(server, str->str, &v, err);
+  g_string_free(str, TRUE);
+  return v;
+}
+
+gint
+g_value_get_as_int(const GValue *gvalue)
+{
+  GValue t = G_VALUE_INIT;
+  gint v;
+  g_value_init(&t, G_TYPE_INT);
+  if (!g_value_transform(gvalue, &t)) {
+    g_critical("Value can't be transformed to int");
+    return 0;
+  }
+  v = g_value_get_int(&t);
+  g_value_unset(&t);
+  return v;
+}
+
+static void
+change_mapping(AppContext *app, const gchar *pathstr, const GValue *gvalue)
+{
+  C2IPConnectionValues *values;
+  C2IPFunction *func;
+  guint id;
+  gchar *attr;
+  guint type;
+  gchar *name;
+  gchar *p = g_alloca(strlen(pathstr));
+  strcpy(p, pathstr);
+  if (!parse_device_path(&p, &type, &name)) return;
+  id = strtoul(p, &attr, 10);
+  if (p == attr || *attr != '/') return;
+  attr++;
+  values = get_values(app, type, name);
+  if (!values) return;
+  func = c2ip_connection_values_get_function(values, id);
+  if (!func) {
+    g_warning("No matching function found for mapping");
+    return;
+  }
+  if (strcmp(attr, "channel") == 0) {
+    GError *err;
+    guint channel = g_value_get_int64(gvalue);
+    gfloat min = 0;
+    gfloat max = 0;
+    min = get_http_float_device(app->http_server, "dmxmap/", "min",
+				c2ip_function_get_device(func), id, NULL);
+    max = get_http_float_device(app->http_server, "dmxmap/","max",
+				c2ip_function_get_device(func), id, NULL);
+    if (!dmx_c2ip_mapper_add_map_function(app->mapper,
+					  channel, func, min, max, &err)) {
+      g_warning("Failed to set mapping: %s", err->message);
+      g_clear_error(&err);
+      return;
+    }
+  } else if (strcmp(attr, "min") == 0) {
+    gfloat min = g_value_get_double(gvalue);
+    dmx_c2ip_mapper_set_min(app->mapper, type, name, id, min);
+  } else  if (strcmp(attr, "max") == 0) {
+    gfloat max = g_value_get_double(gvalue);
+    dmx_c2ip_mapper_set_max(app->mapper, type, name, id, max);
+  } else{
+    g_warning("Unknown mapping attribute '%s'", attr);
+  }
 }
 
 static void
@@ -173,6 +269,8 @@ http_value_changed(HTTPServer *server, GQuark path, const GValue *value,
 #endif
   if (g_str_has_prefix(pathstr, "functions/values/")) {
     change_c2ip_function(app, &pathstr[17], value);
+  } else if (g_str_has_prefix(pathstr, "dmxmap/")) {
+    change_mapping(app, &pathstr[7], value);
   } else {
     g_warning("Unhandled value from HTTP server: %s", pathstr);
   }
@@ -199,13 +297,7 @@ configure_http_server(AppContext *app)
   configure_string_property(app->http_server, "http-root",
 			    app_ctxt.config_file, "HTTP", "Root");
   
-  http_server_set_int(app->http_server, "foo", 78, NULL);
   g_signal_connect(app->http_server, "value-changed", (GCallback)http_value_changed, app);
-  http_server_set_double(app->http_server, "bar/0", 3.1415, NULL);
-  http_server_set_double(app->http_server, "bar/1", -1.41, NULL);
-  http_server_set_boolean(app->http_server, "up", TRUE, NULL);
-  http_server_set_string(app->http_server, "name", "DMX server", NULL);
-  http_server_set_string(app->http_server, "l1/l2/l3/str1", "Deep", NULL);
 }
 
 
@@ -228,7 +320,7 @@ device_found(C2IPScan *scanner,
 	     GInetAddress *addr, guint port, AppContext *app)
 {
   gchar *addr_str = g_inet_address_to_string(addr);
-  g_debug("Found type %d, name '%s' @ %s:%d", type, name, addr_str, port);
+  /* g_debug("Found type %d, name '%s' @ %s:%d", type, name, addr_str, port); */
   g_free(addr_str);
 }
 
@@ -388,11 +480,10 @@ export_mapping(AppContext *app, C2IPFunction *value)
 }
 
 /* Export a value too the world through the web server */
-static gboolean
-export_value(C2IPFunction *value, gpointer user_data)
+static void
+export_function(AppContext *app, C2IPFunction *value)
 {
   gsize prefix_len;
-  AppContext *app = user_data;
   GString *str = g_string_new("functions/values/");
   C2IPDevice *dev = c2ip_function_get_device(value);
   guint vtype = c2ip_function_get_value_type(value);
@@ -442,21 +533,36 @@ export_value(C2IPFunction *value, gpointer user_data)
   
  
   g_string_free(str, TRUE);
-  export_mapping(app, value);
   
+}
+
+static void
+bind_function(AppContext *app, C2IPFunction *func)
+{
+  dmx_c2ip_mapper_bind_function(app->mapper, func, NULL);
+}
+
+static gboolean
+new_function_available(C2IPFunction *func, gpointer user_data)
+{
+  AppContext *app = user_data;
+  export_function(app, func);
+  export_mapping(app, func);
+  bind_function(app, func);
   return FALSE;
 }
 
 static void
 values_ready(C2IPConnectionValues *values, AppContext *app)
 {
-  c2ip_connection_values_foreach(values, export_value, app);
+  c2ip_connection_values_foreach(values, new_function_available, app);
 }
 
 static void
-c2ip_function_changed(C2IPConnectionValues *values, C2IPFunction *value, AppContext *app)
+c2ip_function_changed(C2IPConnectionValues *values, C2IPFunction *func,
+		      AppContext *app)
 {
-  export_value(value, app);
+  export_function(app, func);
 }
 
 
@@ -522,6 +628,52 @@ setup_db(AppContext *app, GError **err)
   return TRUE;
 }
 
+static void
+dmx_mapping_changed(DMXC2IPMapper *mapper, guint channel, guint dev_type,
+		    const gchar *dev_name, guint func_id, AppContext *app)
+{
+  if (app->http_server) {
+    gfloat min, max;
+    GString *path = g_string_new("dmxmap/");
+    guint prefix_len;
+    g_string_append_printf(path,"%s/%s/%d/",
+			   dev_name, device_type_to_string(dev_type), func_id);
+    prefix_len = path->len;
+    g_string_append(path,"channel");
+    http_server_set_int(app->http_server, path->str, channel, NULL);
+
+    if (dmx_c2ip_mapper_get_minmax(mapper, dev_type, dev_name, func_id,
+				   &min, &max)) {
+      g_string_truncate(path, prefix_len);
+      g_string_append(path,"min");
+      http_server_set_double(app->http_server, path->str, min, NULL);
+
+      g_string_truncate(path, prefix_len);
+      g_string_append(path,"max");
+      http_server_set_double(app->http_server, path->str, max, NULL);
+    }
+    g_string_free(path, TRUE);
+  }
+}
+
+static void
+dmx_mapping_removed(DMXC2IPMapper *mapper, guint channel, guint dev_type,
+		    const gchar *dev_name, guint func_id, AppContext *app)
+{
+}
+
+static gboolean
+setup_mapper(AppContext *app, GError **err)
+{
+  app->mapper = dmx_c2ip_mapper_new(app->db, "dmx_c2ip_map", err);
+  if (!app->mapper) return FALSE;
+  g_signal_connect(app->mapper, "mapping-changed",
+		   (GCallback)dmx_mapping_changed, app);
+  g_signal_connect(app->mapper, "mapping-removed",
+		   (GCallback)dmx_mapping_removed, app);
+  return TRUE;
+}
+
 const GOptionEntry app_options[] = {
   {"config-file", 'c', 0, G_OPTION_ARG_FILENAME,
    &app_ctxt.config_filename, "Configuration file", "FILE"},
@@ -564,6 +716,11 @@ main(int argc, char *argv[])
   }
   if (!setup_db(&app_ctxt, &err)) {
     g_printerr("Failed to setup db: %s\n", err->message);
+    app_cleanup(&app_ctxt);
+    return EXIT_FAILURE;
+  }
+  if (!setup_mapper(&app_ctxt, &err)) {
+    g_printerr("Failed to setup DMX mapper: %s\n", err->message);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }

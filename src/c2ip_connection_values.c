@@ -275,7 +275,7 @@ value_object_changed(C2IPFunction *v, GParamSpec *pspec,
   guint vtype;
   guint vsize;
   guint8 vbuffer[255];
-  
+  if (values->setup_state != SETUP_DONE) return;
   vtype = c2ip_function_get_value_type(v);
   gvalue = c2ip_function_get_value(v);
   switch(vtype) {

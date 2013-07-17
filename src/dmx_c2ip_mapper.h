@@ -32,14 +32,36 @@ dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
 			gfloat min, gfloat max, GError **err);
 
 gboolean
-dmx_c2ip_mapper_remove_map_func(DMXC2IPMapper *mapper,
+dmx_c2ip_mapper_add_map_function(DMXC2IPMapper *mapper, guint channel,
+				 C2IPFunction *func,
+				 gfloat min, gfloat max, GError **err);
+
+gboolean
+dmx_c2ip_mapper_bind_function(DMXC2IPMapper *mapper,
+			      C2IPFunction *func,
+			      GError **err);
+
+gboolean
+dmx_c2ip_mapper_remove_func(DMXC2IPMapper *mapper,
 				guint type, const gchar *name, guint id);
 
 gboolean
-dmx_c2ip_mapper_remove_map_channel(DMXC2IPMapper *mapper, guint channel);
+dmx_c2ip_mapper_remove_channel(DMXC2IPMapper *mapper, guint channel);
 
 gboolean
 dmx_c2ip_mapper_set_channel(DMXC2IPMapper *mapper,
 			    guint channel, guint value, GError **err);
+gboolean
+dmx_c2ip_mapper_get_minmax(DMXC2IPMapper *mapper,
+			   guint dev_type, const gchar *dev_name, guint func_id,
+			   gfloat *min, gfloat *max);
+gboolean
+dmx_c2ip_mapper_set_min(DMXC2IPMapper *mapper,
+			guint dev_type, const gchar *dev_name, guint func_id,
+			gfloat min);
+gboolean
+dmx_c2ip_mapper_set_max(DMXC2IPMapper *mapper,
+			guint dev_type, const gchar *dev_name, guint func_id,
+			gfloat max);
 
 #endif /* __DMX_C2IP_MAPPER_H__E1ROHMG2OP__ */
