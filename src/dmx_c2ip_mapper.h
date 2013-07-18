@@ -7,7 +7,8 @@
 
 #define DMX_C2IP_MAPPER_ERROR (dmx_c2ip_mapper_error_quark())
 enum {
-  DMX_C2IP_MAPPER_ERROR_INCOMPATIBLE_VALUE = 1
+  DMX_C2IP_MAPPER_ERROR_INCOMPATIBLE_VALUE = 1,
+  DMX_C2IP_MAPPER_ERROR_DATABASE_ERROR
 };
 
 #define DMX_C2IP_MAPPER_TYPE                  (dmx_c2ip_mapper_get_type ())
@@ -24,7 +25,12 @@ GType
 dmx_c2ip_mapper_get_type(void);
 
 DMXC2IPMapper *
-dmx_c2ip_mapper_new(sqlite3 *db, const gchar *table, GError **err);
+dmx_c2ip_mapper_new(void);
+
+gboolean
+dmx_c2ip_mapper_read_db(DMXC2IPMapper *mapper,
+			sqlite3 *db, const gchar *table, GError **err);
+
 
 gboolean
 dmx_c2ip_mapper_add_map(DMXC2IPMapper *mapper, guint channel,
@@ -51,10 +57,14 @@ dmx_c2ip_mapper_remove_channel(DMXC2IPMapper *mapper, guint channel);
 gboolean
 dmx_c2ip_mapper_set_channel(DMXC2IPMapper *mapper,
 			    guint channel, guint value, GError **err);
+
 gboolean
-dmx_c2ip_mapper_get_minmax(DMXC2IPMapper *mapper,
-			   guint dev_type, const gchar *dev_name, guint func_id,
-			   gfloat *min, gfloat *max);
+dmx_c2ip_mapper_get_function_mapping(DMXC2IPMapper *mapper,
+				     guint dev_type, const gchar *dev_name,
+				     guint func_id,
+				     guint *channel,
+				     gfloat *min, gfloat *max);
+
 gboolean
 dmx_c2ip_mapper_set_min(DMXC2IPMapper *mapper,
 			guint dev_type, const gchar *dev_name, guint func_id,

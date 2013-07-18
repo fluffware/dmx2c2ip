@@ -46,6 +46,10 @@ struct _DMXC2IPMapper
   GSequence *channel_map;
   /* Maps functions to channels */
   GTree *function_map;
+
+  sqlite3_stmt *stmt_add_mapping;
+  sqlite3_stmt *stmt_remove_mapping;
+  sqlite3_stmt *stmt_change_mapping;
 };
 
 struct _DMXC2IPMapperClass
@@ -79,6 +83,15 @@ free_entry(gpointer p)
 }
 
 static void
+clear_statement(sqlite3_stmt **stmt)
+{
+  if (*stmt) {
+    sqlite3_finalize(*stmt);
+    *stmt = NULL;
+  }
+}
+
+static void
 dispose(GObject *gobj)
 {
   DMXC2IPMapper *mapper = DMX_C2IP_MAPPER(gobj);
@@ -88,6 +101,11 @@ dispose(GObject *gobj)
     g_sequence_free(mapper->channel_map);
     mapper->channel_map = NULL;
   }
+  
+  clear_statement(&mapper->stmt_add_mapping);
+  clear_statement(&mapper->stmt_remove_mapping);
+  clear_statement(&mapper->stmt_change_mapping);
+  
   g_free(mapper->table);
   mapper->table = NULL;
   G_OBJECT_CLASS(dmx_c2ip_mapper_parent_class)->dispose(gobj);
@@ -173,15 +191,179 @@ dmx_c2ip_mapper_init(DMXC2IPMapper *mapper)
   mapper->table = NULL;
   mapper->channel_map = g_sequence_new(free_entry);
   mapper->function_map = g_tree_new(function_cmp);
+
+  mapper->stmt_add_mapping = NULL;
+  mapper->stmt_change_mapping = NULL;
+  mapper->stmt_remove_mapping = NULL;
 }
 
 DMXC2IPMapper *
-dmx_c2ip_mapper_new(sqlite3 *db, const gchar *table, GError **err)
+dmx_c2ip_mapper_new()
 {
   DMXC2IPMapper *mapper = g_object_new (DMX_C2IP_MAPPER_TYPE, NULL);
+  return mapper;
+}
+
+
+static gboolean
+prepare_statement(DMXC2IPMapper *mapper, sqlite3_stmt **stmt,
+		  const gchar *stmt_str, GError **err)
+{
+  gint res;
+  GString *str = g_string_new("");
+  if (*stmt) {
+    sqlite3_finalize(*stmt);
+  }
+
+  g_string_printf(str, stmt_str, mapper->table);
+  res = sqlite3_prepare_v2(mapper->db, str->str, str->len, stmt, NULL);
+  if (res != SQLITE_OK) {
+    g_set_error(err, DMX_C2IP_MAPPER_ERROR,
+		DMX_C2IP_MAPPER_ERROR_DATABASE_ERROR,
+		"Failed to prepare statement '%s': %s",
+		str->str, sqlite3_errmsg(mapper->db));
+    g_string_free(str, TRUE);
+    return FALSE;
+  }
+  g_string_free(str, TRUE);
+  return TRUE;
+}
+#define DB_COL_DEVICE_TYPE 0
+#define DB_COL_DEVICE_NAME 1
+#define DB_COL_FUNCTION_ID 2
+#define DB_COL_CHANNEL 3
+#define DB_COL_MIN 4
+#define DB_COL_MAX 5
+
+gboolean
+dmx_c2ip_mapper_read_db(DMXC2IPMapper *mapper,
+			sqlite3 *db, const gchar *table, GError **err)
+{
+  char *errmsg;
+  sqlite3_stmt *stmt;
+  int res;
+  GString *str = g_string_new("");
+
+  clear_statement(&mapper->stmt_add_mapping);
+  clear_statement(&mapper->stmt_remove_mapping);
+  clear_statement(&mapper->stmt_change_mapping);
+
   mapper->db = db;
   mapper->table = g_strdup(table);
-  return mapper;
+  g_string_printf(str, "create table if not exists %s "
+		  "(device_type int, device_name text, "
+		  "function_id int, channel int, min real, max real);",
+		  mapper->table);
+  res = sqlite3_exec(db, str->str, NULL, NULL, &errmsg);
+  if (res != SQLITE_OK) {
+    g_set_error(err, DMX_C2IP_MAPPER_ERROR,
+		DMX_C2IP_MAPPER_ERROR_DATABASE_ERROR,
+		"Failed to create DMX map database: %s", errmsg);
+    sqlite3_free(errmsg);
+    g_string_free(str, TRUE);
+    return FALSE;
+  }
+
+  g_string_printf(str, "select * from %s;", mapper->table);
+  res = sqlite3_prepare_v2(db, str->str, str->len,
+			   &stmt, NULL);
+  g_string_free(str, TRUE);
+  if (res != SQLITE_OK) {
+    g_set_error(err, DMX_C2IP_MAPPER_ERROR,
+		DMX_C2IP_MAPPER_ERROR_DATABASE_ERROR,
+		"Failed to select mappings: %s", sqlite3_errmsg(db));
+    return FALSE;
+  }
+  while((res = sqlite3_step(stmt)) == SQLITE_ROW) {
+    gint func_id = sqlite3_column_int(stmt, DB_COL_FUNCTION_ID);
+    gint dev_type = sqlite3_column_int(stmt, DB_COL_DEVICE_TYPE);
+    const gchar *dev_name = (const gchar*)
+      sqlite3_column_text(stmt, DB_COL_DEVICE_NAME);
+    gint channel = sqlite3_column_int(stmt, DB_COL_CHANNEL);
+    gfloat min = sqlite3_column_double(stmt, DB_COL_MIN);
+    gfloat max = sqlite3_column_double(stmt, DB_COL_MAX);
+    if (!dmx_c2ip_mapper_add_map(mapper, channel, dev_type, dev_name, func_id,
+				 min, max, err))
+      {
+	sqlite3_finalize(stmt);
+	g_string_free(str, TRUE);
+	return FALSE;
+      }
+  }
+  sqlite3_finalize(stmt);
+  if (res != SQLITE_DONE) {
+    g_set_error(err, DMX_C2IP_MAPPER_ERROR,
+		DMX_C2IP_MAPPER_ERROR_DATABASE_ERROR,
+		 "Failed to get mappings: %s", sqlite3_errmsg(db));
+    g_string_free(str, TRUE);
+    return FALSE;
+  }
+  
+  if (!prepare_statement(mapper, &mapper->stmt_add_mapping,
+			 "insert into %s values (?1, ?2, ?3, ?4, ?5, ?6);",
+			 err)) {
+    return FALSE;
+  }
+  if (!prepare_statement(mapper, &mapper->stmt_remove_mapping,
+			 "delete from %s where device_type = ?1 "
+			 "and device_name = ?2 and function_id = ?3;",
+			 err)) {
+    return FALSE;
+  }
+
+  if (!prepare_statement(mapper, &mapper->stmt_change_mapping,
+			 "update %s set min = ?4, max = ?5 "
+			 "where device_type = ?1 and device_name = ?2 "
+			 "and function_id = ?3;", err)) {
+    return FALSE;
+  }
+							 
+  return TRUE;
+}
+
+static void
+entry_added(DMXC2IPMapper *mapper, MapEntry *e)
+{
+  if (mapper->stmt_add_mapping) {
+    gint res;
+    sqlite3_reset(mapper->stmt_add_mapping);
+    sqlite3_bind_int(mapper->stmt_add_mapping, 1, e->dev_type);
+    sqlite3_bind_text(mapper->stmt_add_mapping, 2, e->dev_name, -1,
+		      SQLITE_TRANSIENT);
+    sqlite3_bind_int(mapper->stmt_add_mapping, 3, e->func_id);
+    sqlite3_bind_int(mapper->stmt_add_mapping, 4, e->channel);
+    sqlite3_bind_double(mapper->stmt_add_mapping, 5, e->min);
+    sqlite3_bind_double(mapper->stmt_add_mapping, 6, e->max);
+
+    res = sqlite3_step(mapper->stmt_add_mapping);
+    if (res != SQLITE_DONE) {
+      g_warning("Failed to insert mapping in database: %s",
+		sqlite3_errmsg(mapper->db));
+    }
+  }
+  g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		e->channel, e->dev_type, e->dev_name, e->func_id);
+}
+
+static void
+entry_removed(DMXC2IPMapper *mapper, MapEntry *e)
+{
+  if (mapper->stmt_remove_mapping) {
+    gint res;
+    sqlite3_reset(mapper->stmt_remove_mapping);
+    sqlite3_bind_int(mapper->stmt_remove_mapping, 1, e->dev_type);
+    sqlite3_bind_text(mapper->stmt_remove_mapping, 2, e->dev_name, -1,
+		      SQLITE_TRANSIENT);
+    sqlite3_bind_int(mapper->stmt_remove_mapping, 3, e->func_id);
+   
+    res = sqlite3_step(mapper->stmt_remove_mapping);
+    if (res != SQLITE_DONE) {
+      g_warning("Failed to remove mapping from database: %s",
+		sqlite3_errmsg(mapper->db));
+    }
+  }
+  g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
+		e->channel, e->dev_type, e->dev_name, e->func_id);
 }
 
 MapEntry *
@@ -201,16 +383,14 @@ add_entry(DMXC2IPMapper *mapper, guint channel,
     /* Function already mapped to another channel. Just change the
        channel and update limits. */
     free_entry(new_entry);
-    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
-		  e->channel, type, name, id);
+    entry_removed(mapper, e);
     g_tree_remove(mapper->function_map, e);
     e->channel = channel;
     e->min = min;
     e->max = max;
     g_tree_insert(mapper->function_map, e, e);
     g_sequence_sort(mapper->channel_map, map_cmp, NULL);
-    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
-		  channel, type, name, id);
+    entry_added(mapper, e);
     return e;
   } else {
     new_entry->channel = channel;
@@ -219,8 +399,7 @@ add_entry(DMXC2IPMapper *mapper, guint channel,
     new_entry->max = max;
     g_sequence_insert_sorted(mapper->channel_map, new_entry, map_cmp, NULL);
     g_tree_insert(mapper->function_map, new_entry, new_entry);
-    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
-		  channel, type, name, id);
+    entry_added(mapper, new_entry);
     return new_entry;
   } 
 }
@@ -288,7 +467,13 @@ dmx_c2ip_mapper_bind_function(DMXC2IPMapper *mapper,
   return TRUE;
 }
 
-
+static void
+remove_entry(DMXC2IPMapper *mapper, GSequenceIter *iter, MapEntry *e)
+{
+   entry_removed(mapper, e);
+   g_tree_remove(mapper->function_map, e);
+   g_sequence_remove(iter);
+}
 
 gboolean
 dmx_c2ip_mapper_remove_func(DMXC2IPMapper *mapper,
@@ -301,12 +486,9 @@ dmx_c2ip_mapper_remove_func(DMXC2IPMapper *mapper,
   key.func_id = id;
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
-    GSequenceIter *iter;
-    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
-		  e->channel, type, name, id);
-    g_tree_remove(mapper->function_map, e);
-    iter = g_sequence_lookup(mapper->channel_map, e, map_cmp, NULL);
-    g_sequence_remove(iter);
+    GSequenceIter *iter =
+      g_sequence_lookup(mapper->channel_map, e, map_cmp, NULL);;
+    remove_entry(mapper, iter, e);
     return TRUE;
   }
   return FALSE;
@@ -328,10 +510,7 @@ dmx_c2ip_mapper_remove_channel(DMXC2IPMapper *mapper, guint channel)
 	GSequenceIter *prev = g_sequence_iter_prev(i);
 	e = g_sequence_get(i);
 	if (e->channel != channel) break;
-	g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
-		      e->channel, e->dev_type, e->dev_name, e->func_id);
-	g_tree_remove(mapper->function_map, e);
-	g_sequence_remove(i);
+	remove_entry(mapper, i, e);
 	i = prev;
       }
     }
@@ -340,10 +519,7 @@ dmx_c2ip_mapper_remove_channel(DMXC2IPMapper *mapper, guint channel)
       GSequenceIter *next = g_sequence_iter_next(i);
       e = g_sequence_get(i);
       if (e->channel != channel) break;
-      g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_REMOVED], 0,
-		    e->channel, e->dev_type, e->dev_name, e->func_id);
-      g_tree_remove(mapper->function_map, e);
-      g_sequence_remove(i);
+      remove_entry(mapper, i, e);
       i = next;
     }
     return TRUE;
@@ -413,9 +589,11 @@ dmx_c2ip_mapper_set_channel(DMXC2IPMapper *mapper,
 
 
 gboolean
-dmx_c2ip_mapper_get_minmax(DMXC2IPMapper *mapper,
-			   guint dev_type, const gchar *dev_name, guint func_id,
-			   gfloat *min, gfloat *max)
+dmx_c2ip_mapper_get_function_mapping(DMXC2IPMapper *mapper,
+				     guint dev_type, const gchar *dev_name,
+				     guint func_id,
+				     guint *channel,
+				     gfloat *min, gfloat *max)
 {
   MapEntry *e;
   MapEntry key;
@@ -424,11 +602,35 @@ dmx_c2ip_mapper_get_minmax(DMXC2IPMapper *mapper,
   key.func_id = func_id;
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
+    *channel = e->channel,
     *min = e->min;
     *max = e->max;
     return TRUE;
   }
   return FALSE;
+}
+
+static void
+entry_changed(DMXC2IPMapper *mapper, MapEntry *e)
+{
+  if (mapper->stmt_change_mapping) {
+    gint res;
+    sqlite3_reset(mapper->stmt_change_mapping);
+    sqlite3_bind_int(mapper->stmt_change_mapping, 1, e->dev_type);
+    sqlite3_bind_text(mapper->stmt_change_mapping, 2, e->dev_name, -1,
+		      SQLITE_TRANSIENT);
+    sqlite3_bind_int(mapper->stmt_change_mapping, 3, e->func_id);
+    sqlite3_bind_double(mapper->stmt_change_mapping, 4, e->min);
+    sqlite3_bind_double(mapper->stmt_change_mapping, 5, e->max);
+
+    res = sqlite3_step(mapper->stmt_change_mapping);
+    if (res != SQLITE_DONE) {
+      g_warning("Failed to change mapping in database: %s",
+		sqlite3_errmsg(mapper->db));
+    }
+  }
+    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
+		  e->channel, e->dev_type, e->dev_name, e->func_id);  
 }
 
 gboolean
@@ -444,6 +646,7 @@ dmx_c2ip_mapper_set_min(DMXC2IPMapper *mapper,
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
     e->min = min;
+    entry_changed(mapper, e);
     g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
 		  e->channel, e->dev_type, e->dev_name, e->func_id);
     return TRUE;
@@ -464,8 +667,7 @@ dmx_c2ip_mapper_set_max(DMXC2IPMapper *mapper,
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
     e->max = max;
-    g_signal_emit(mapper, dmx_c2ip_mapper_signals[MAPPING_CHANGED], 0,
-		  e->channel, e->dev_type, e->dev_name, e->func_id);
+    entry_changed(mapper, e);
     return TRUE;
   }
   return FALSE;
