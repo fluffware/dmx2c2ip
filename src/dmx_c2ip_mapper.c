@@ -454,8 +454,9 @@ dmx_c2ip_mapper_bind_function(DMXC2IPMapper *mapper,
 {
   MapEntry *e;
   MapEntry key;
-  key.dev_type = c2ip_function_get_value_type(func);
-  key.dev_name = (gchar*)c2ip_function_get_name(func);
+  C2IPDevice *dev = c2ip_function_get_device(func);
+  key.dev_type = c2ip_device_get_device_type(dev);
+  key.dev_name = (gchar*)c2ip_device_get_device_name(dev);
   key.func_id = c2ip_function_get_id(func);
   e = g_tree_lookup(mapper->function_map, &key);
   if (e) {
@@ -567,14 +568,11 @@ dmx_c2ip_mapper_set_channel(DMXC2IPMapper *mapper,
   if (iter) {
     MapEntry *e;
     GSequenceIter *i = iter;
-    if (!g_sequence_iter_is_begin(i)) {
+    while(!g_sequence_iter_is_begin(i)) {
       i = g_sequence_iter_prev(i);
-      while(!g_sequence_iter_is_begin(i)) {
-	e = g_sequence_get(i);
-	if (e->channel != channel) break;
-	if (!set_function(e, value, err)) return FALSE;
-	i = g_sequence_iter_prev(i);
-      }
+      e = g_sequence_get(i);
+      if (e->channel != channel) break;
+      if (!set_function(e, value, err)) return FALSE;
     }
     i = iter;
     while(!g_sequence_iter_is_end(i)) {
