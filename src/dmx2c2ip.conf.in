@@ -1,0 +1,19 @@
+[DMXPort]
+Device=/dev/ttyAMA0
+# Only set to non default for testing 
+# Speed=250000
+
+[HTTP]
+Port=8081
+# No authentication if user not set
+#User=admin
+#Password=password
+# PAth to files served by HTTP. No trailing '/'
+Root=/home/pi/projects/dmx2c2ip/src/http_root
+
+[C2IP]
+# Comma separated list of addresses
+Addresses=255.255.255.255
+
+[DB]
+File=@localstatedir@/lib/dmx2c2ip/dmx2c2ip.db

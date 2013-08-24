@@ -1,8 +1,9 @@
+SUBDIRS=http_root
 
 AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@ -Wno-long-long
 
-noinst_PROGRAMS = dmx_send
-bin_PROGRAMS = dmx2c2ip c2ip_tool
+noinst_PROGRAMS = dmx_send c2ip_tool
+bin_PROGRAMS = dmx2c2ip
 
 dmx2c2ip_SOURCES = main.c \
 dmx_recv.c dmx_recv.h \
@@ -44,6 +45,8 @@ c2ip_tool_LDADD= @GLIB_LIBS@ -lreadline
 	glib-genmarshal --body --prefix="$*marshal" $< > $@.tmp && \
         mv $@.tmp $@
 
+EXTRA_DIST=dmx2c2ip.conf.in
+sysconf_DATA=dmx2c2ip.conf
 BUILT_SOURCES =  c2ip_scan_marshal.c c2ip_scan_marshal.h \
 c2ip_connection_values_marshal.c c2ip_connection_values_marshal.h \
 c2ip_connection_manager_marshal.c c2ip_connection_manager_marshal.h \

@@ -1,0 +1,10 @@
+# Defaults for dmx2c2ip initscript
+# sourced by /etc/init.d/dmx2c2ip
+# installed at /etc/default/dmx2c2ip by the maintainer scripts
+
+#
+# This is a POSIX shell fragment
+#
+
+# Additional options that are passed to the Daemon.
+DAEMON_OPTS=""

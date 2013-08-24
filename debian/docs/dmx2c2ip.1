@@ -1,0 +1,101 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.\" (C) Copyright 2013 Simon Berg <ksb@users.sourceforge.net>,
+.\"
+.\" First parameter, NAME, should be all caps
+.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
+.\" other parameters are allowed: see man(7), man(1)
+.TH DMX2C2IP SECTION "August 24, 2013"
+.\" Please adjust this date whenever revising the manpage.
+.\"
+.\" Some roff macros, for reference:
+.\" .nh        disable hyphenation
+.\" .hy        enable hyphenation
+.\" .ad l      left justify
+.\" .ad b      justify to both left and right margins
+.\" .nf        disable filling
+.\" .fi        enable filling
+.\" .br        insert line break
+.\" .sp <n>    insert n+1 empty lines
+.\" for manpage-specific macros, see man(7)
+.SH NAME
+dmx2c2ip \- map DMX to C2IP
+.SH SYNOPSIS
+.B dmx2c2ip
+.RI [ options ]
+.SH DESCRIPTION
+.B dmx2c2ip
+connects to devices speaking the C2IP protocol:
+Interactive control is provided through a web interface.
+.TP
+.B \-h, \-\-help
+Show summary of options.
+.TP
+\fB\-c, --config-file\fR=\fIFILE\fI 
+Read configuration from \fRFILE\fI
+.SH CONFIGURATION
+Initial configuration is from a key-value style configuration file.
+
+The file is divided into several groups, each group starts with a group
+name enclosed in '[' and ']'.
+Within the groups there are keys followed by '=' and a value.
+
+.TP
+\fB[HTTP]\fR group
+Defines parameters for the built-in HTTP-server
+.RS
+.TP
+\fBPort\fR=\fIPORT\fR
+Selects the TCP port used by HTTP
+.TP
+\fBUser\fR=\fIUSER\fR
+User name used for authentication. No authentication is done when this
+key is missing.
+
+.TP
+\fBPassword\fR=\fIPASSWORD\fR
+Password for authentication.
+
+.TP
+\fBRoot\fR=\fIDIR\fR
+Directory where the files served by the HTTP server is stored.
+.RE
+
+.TP
+\fB[DMXPort]\fR group
+Defines parameters for the DMX port
+.RS
+.TP
+\fBDevice\fR=\fISERDEV\fR
+Serial device receiving DMX data.
+
+.TP
+\fBSpeed\fR=\fIBAUD\fR
+Baudrate of serial device. This should normally be the default value
+250000.  Other values is only useful for testing.
+
+.RE
+
+.TP
+\fB[C2IP]\fR group
+C2IP set up
+.RS
+.TP
+\fBAdresses\fR=\fIADDRS\fR
+A comma separated list of addresses to try to connect to. The address
+may be a broadcast address.
+
+.RE
+
+.TP
+\fB[DB]\fR group
+SQLite database for configuration.
+.RS
+.TP
+\fBFile\fR=\fIFILE\fR
+File name of database.
+
+.RE
+
+.SH AUTHOR
+Simon Berg <ksb@users.sourceforge.net>
+

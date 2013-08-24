@@ -1,0 +1,21 @@
+Source: dmx2c2ip
+Section: net
+Priority: optional
+Maintainer: Simon Berg <ksb@users.sourceforge.net>
+Build-Depends: debhelper (>= 8.0.0), autotools-dev, libglib2.0-dev,libmicrohttpd-dev, libjson-glib-dev
+Standards-Version: 3.9.3
+#Homepage:
+Vcs-Git: https://github.com/fluffware/dmx2c2ip.git
+Vcs-Browser: https://github.com/fluffware/dmx2c2ip
+
+Package: dmx2c2ip
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: DMX to C2IP mapper
+ dmx2c2ip enables control of devices supporting the C2IP protocol from DMX.
+ C2IP is developed by Grass Valley for their camera equipment.
+ DMX is a lighting control protocol.
+ .
+ DMX channels can be mapped to various parameters exported by the
+ device through the C2IP protocol.
+ The program runs as a server and is controlled through the built-in webserver.

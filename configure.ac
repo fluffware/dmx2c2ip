@@ -26,5 +26,5 @@ else
 AC_MSG_RESULT([not found])
 fi
 
-AC_CONFIG_FILES([Makefile src/Makefile ])
+AC_CONFIG_FILES([Makefile src/Makefile src/dmx2c2ip.conf src/http_root/Makefile])
 AC_OUTPUT
