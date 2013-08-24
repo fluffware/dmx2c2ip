@@ -5,14 +5,20 @@
 #include <c2ip_device.h>
 
 #define C2IP_FUNCTION_TYPE_ENUM_TYPE (c2ip_function_type_enum_get_type())
+#define C2IP_FUNCTION_TYPE_ENUM_CLASS (c2ip_function_type_enum_get_class())
 
 #define C2IP_FUNCTION_FLAGS_TYPE (c2ip_function_flags_get_type())
+#define C2IP_FUNCTION_FLAGS_CLASS (c2ip_function_flags_get_class())
 
 GType
 c2ip_function_type_enum_get_type(void);
+gpointer
+c2ip_function_type_enum_get_class(void);
 
 GType
 c2ip_function_flags_get_type(void);
+gpointer
+c2ip_function_flags_get_class(void);
 
 #define C2IP_FUNCTION_TYPE                  (c2ip_function_get_type ())
 #define C2IP_FUNCTION(obj)                  (G_TYPE_CHECK_INSTANCE_CAST ((obj), C2IP_FUNCTION_TYPE, C2IPFunction))

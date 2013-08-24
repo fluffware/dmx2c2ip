@@ -104,7 +104,7 @@ c2ip_dump(FILE *file, const uint8_t *packet, unsigned int length)
       
     }
     break;
-  case C2IP_PKT_TYPE_DEVICE:
+  default:
     switch(packet[4]) {
     case C2IP_INDICATION_VALUE:
     case C2IP_REPLY_VALUE:

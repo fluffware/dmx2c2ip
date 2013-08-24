@@ -1,3 +1,6 @@
+#ifndef __C2IP_DEVICE_C__E7SYT6CRZ3__
+#define __C2IP_DEVICE_C__E7SYT6CRZ3__
+
 #include "c2ip_device.h"
 #include "c2ip.h"
 
@@ -52,6 +55,15 @@ c2ip_device_type_enum_get_type(void)
   return type;
 }
 
+gpointer
+c2ip_device_type_enum_get_class(void)
+{
+  static gpointer gclass = NULL;
+  if (!gclass) {
+    gclass = g_type_class_ref(C2IP_DEVICE_TYPE_ENUM_TYPE);
+  }
+  return gclass;
+}
 
 enum
 {
@@ -265,3 +277,5 @@ c2ip_device_set_device_id(C2IPDevice *dev, const gchar *id)
   return dev->device_id;
 }
 
+
+#endif /* __C2IP_DEVICE_C__E7SYT6CRZ3__ */

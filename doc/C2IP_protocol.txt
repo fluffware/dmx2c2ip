@@ -1,6 +1,3 @@
-Name server protocol
-Uses UDP, port 1500
-
 Types 
 U8	Unsigned 8 bit integer
 U12	Unsigned big endian 12 bit integer, just a limited U16
@@ -8,7 +5,7 @@ U16	Unsigned big endian 16 bit integer
 STRING	One byte length followed by characters
 BOOL	8bit 
 ENUM	8bit
-VTYPE	Value type, 8 bit
+VTYPE	Value type, 8 bit, may contain flags, mask with 0x8f
 	0	U8
 	1	Enumeration
 	2	Boolean
@@ -16,13 +13,35 @@ VTYPE	Value type, 8 bit
 	5	S16
 	0x80	U12
 	0x85	16bit floating point
+	
 
+
+IPADDR	IPv4 address
+
+General format of packets
+Length 	Type	Value		Description
+2	U16			Packet type (protocol?)
+2	U16	l		Data length (rest of packet)
+1	U8			Subtype
+l-1				Data
+
+
+
+
+
+Name server protocol
+Uses UDP, port 1500
+
+
+
+Request a specific cameradevice
 Request 
 Length 	Type	Value		Description
 2	U16	08		Packet type
-2	U16	03		Data length (rest of packet)
+2	U16			Data length (rest of packet)
 1	U8	01		Request
-2		0000
+1	U8			Device type (0 for any device)
+s	STRING			Device name (empty string for any device)
 
 Reply
 Length	Type	Value		Description
@@ -34,6 +53,7 @@ s	STRING			Name string
 4	IPADDR			IP-address
 2	U16			Port
 
+
 C2IP redirection protocol
 Uses TCP
 
@@ -43,11 +63,11 @@ Byte	Type	Value		Description
 2	U16	01		Packet type
 2	U16	03		Data length (rest of packet)
 1	U8	01		Request
-2		0004		
+2	U16			Slot (4 or 2)
 
 Reply
 Byte	Type	Value		Description
-2	U16	02		Packet type
+2	U16	01		Packet type
 2	U16	04		Data length (rest of packet)
 1	U8	02		Reply
 1	U8			Status (0: off-line, 1:on-line)
@@ -63,7 +83,7 @@ Byte	Type	Value		Description
 2	U16	01		Packet type
 2	U16			Data length (rest of packet)
 1	U8	03		Request
-2		00 04
+2	U16			Slot
 s	STRING			Client name
 3		05 02 01
 

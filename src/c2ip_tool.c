@@ -148,7 +148,7 @@ received_packet(C2IPConnection *conn, guint len, guint8 *packet, AppContext *app
 
 static void
 new_connection(C2IPConnectionManager *cm, C2IPConnection *conn,
-	       guint device_type, const gchar *name,
+	       guint device_type, const gchar *name, guint slot,
 	       AppContext *app)
 {
   guint id = app->next_connection_id++;
@@ -169,10 +169,10 @@ new_connection(C2IPConnectionManager *cm, C2IPConnection *conn,
 }
 
 static gboolean
-setup_c2ip(AppContext *app, const gchar *range_str, GError **err)
+setup_c2ip(AppContext *app, const gchar *addr_str, GError **err)
 {
-  GInetAddressMask *range = g_inet_address_mask_new_from_string(range_str, err);
-  if (!range) {
+  GInetAddress *addr = g_inet_address_new_from_string(addr_str);
+  if (!addr) {
     return FALSE;
   }
   app->c2ip_scanner = c2ip_scan_new();
@@ -182,11 +182,12 @@ setup_c2ip(AppContext *app, const gchar *range_str, GError **err)
 	       NULL);
   g_signal_connect(app->c2ip_scanner, "device-found",
 		   (GCallback)device_found, app);
-  if (!c2ip_scan_start(app->c2ip_scanner, range, err)) {
-    g_object_unref(range);
+  c2ip_scan_add_address(app->c2ip_scanner,addr);
+  if (!c2ip_scan_start(app->c2ip_scanner, err)) {
+    g_object_unref(addr);
     return FALSE;
   }
-  g_object_unref(range);
+  g_object_unref(addr);
 
   app->c2ip_connection_manager = c2ip_connection_manager_new();
   g_signal_connect_swapped(app->c2ip_scanner, "device-found",
@@ -302,7 +303,7 @@ line_handler(char *line)
   }
   if (match_token(token, pos, "scan")) {
     GError *err = NULL;
-    if (!c2ip_scan_start(app_ctxt.c2ip_scanner, NULL, &err)) {
+    if (!c2ip_scan_start(app_ctxt.c2ip_scanner, &err)) {
       printf("Failed to start scan: %s\n", err->message);
       g_clear_error(&err);
     }

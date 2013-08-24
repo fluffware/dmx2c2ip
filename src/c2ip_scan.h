@@ -24,8 +24,11 @@ typedef struct _C2IPScanClass C2IPScanClass;
 C2IPScan *
 c2ip_scan_new(void);
 
+void
+c2ip_scan_add_address(C2IPScan *scanner, GInetAddress *addr);
+
 gboolean
-c2ip_scan_start(C2IPScan *scanner, GInetAddressMask *range, GError **err);
+c2ip_scan_start(C2IPScan *scanner, GError **err);
 
 void
 c2ip_scan_stop(C2IPScan *scanner);

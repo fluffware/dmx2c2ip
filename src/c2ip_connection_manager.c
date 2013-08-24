@@ -33,6 +33,7 @@ struct _DeviceList
   DeviceList **prevp;
   guint type;
   gchar *name;
+  guint slot;
   GInetSocketAddress *addr;
   C2IPConnection *connection;
 };
@@ -57,7 +58,8 @@ struct _C2IPConnectionManagerClass
 
   /* Signals */
   void (*new_connection)(C2IPConnectionManager *cm,
-			 C2IPConnection *conn, guint device_type, const gchar *name);
+			 C2IPConnection *conn,
+			 guint device_type, const gchar *name, guint slot);
 };
 
 G_DEFINE_TYPE (C2IPConnectionManager, c2ip_connection_manager, G_TYPE_OBJECT)
@@ -75,6 +77,17 @@ destroy_device(DeviceList *dev)
     g_object_unref(dev->connection);
   }
   g_free(dev);
+}
+
+static const guint slot_sequence[] = {4,2,0};
+
+static guint
+next_slot(guint slot)
+{
+  const guint *s = slot_sequence;
+  while(*s != 0 && *s != slot) s++;
+  if (*s != 0) return s[1];
+  return 0;
 }
 
 static void
@@ -147,9 +160,9 @@ c2ip_connection_manager_class_init (C2IPConnectionManagerClass *klass)
 		 G_SIGNAL_RUN_LAST,
 		 G_STRUCT_OFFSET(C2IPConnectionManagerClass, new_connection),
 		 NULL, NULL,
-		 c2ip_connection_manager_marshal_VOID__OBJECT_UINT_STRING,
-		 G_TYPE_NONE, 3,
-		 C2IP_CONNECTION_TYPE, G_TYPE_UINT, G_TYPE_STRING);
+		 c2ip_connection_manager_marshal_VOID__OBJECT_UINT_STRING_UINT,
+		 G_TYPE_NONE, 4,
+		 C2IP_CONNECTION_TYPE, G_TYPE_UINT, G_TYPE_STRING,G_TYPE_UINT);
   
 #if 0
   properties[0] = NULL;
@@ -243,22 +256,30 @@ handle_data(GObject *source_object, GAsyncResult *res, gpointer user_data)
     fail_connection(cm);
     return;
   }
+  dev = cm->connecting_device;
+  
   if (cm->reply_buffer[5] == 0x00) {
-    g_debug("Device is off-line");
-    fail_connection(cm);
+    g_debug("Device %s %d (slot %d) is off-line", dev->name, dev->type, dev->slot);
+    dev->slot = next_slot(dev->slot);
+    if (dev->slot == 0) {
+      fail_connection(cm);
+    } else {
+      /* Try again with next slot */
+      cleanup_connection(cm);
+    }
     return;
   }
   g_debug("Got port: %d",C2IP_U16(&cm->reply_buffer[6]));
-  dev = cm->connecting_device;
+
   addr = g_inet_socket_address_new(g_inet_socket_address_get_address(dev->addr),
 				   C2IP_U16(&cm->reply_buffer[6]));
-  dev->connection = c2ip_connection_new(G_INET_SOCKET_ADDRESS(addr));
+  dev->connection = c2ip_connection_new(G_INET_SOCKET_ADDRESS(addr), dev->slot);
   g_object_unref(addr);
   g_signal_connect_object(dev->connection, "connection-closed",
 			  (GCallback)connection_closed, cm,
 			  0);
   g_signal_emit(cm, c2ip_connection_manager_signals[NEW_CONNECTION], 0,
-		dev->connection, dev->type, dev->name);
+		dev->connection, dev->type, dev->name, dev->slot);
   cleanup_connection(cm);
 }
 
@@ -302,7 +323,8 @@ static void
 connect_callback(GObject *source_object, GAsyncResult *res, gpointer user_data)
 {
   gsize written;
-  static guint8 request[] = {0x00, 0x01, 0x00, 0x03, 0x01, 0x00,0x04};
+  static guint8 request_templ[] = {0x00, 0x01, 0x00, 0x03, 0x01, 0x00,0x04};
+  guint8 request[sizeof(request_templ)];
   GOutputStream *out;
   GInputStream *in;
   GError *err = NULL;
@@ -310,10 +332,12 @@ connect_callback(GObject *source_object, GAsyncResult *res, gpointer user_data)
   cm->connection = g_socket_client_connect_finish(cm->client, res, &err);
   if (!cm->connection) {
     g_warning("Connection failed: %s", err->message);
-    g_clear_object(&err);
+    g_clear_error(&err);
     fail_connection(cm);
     return;
   }
+  memcpy(request, request_templ, sizeof(request));
+  C2IP_U16_SET(request + 5, cm->connecting_device->slot);
   out = g_io_stream_get_output_stream(G_IO_STREAM(cm->connection));
   if (!g_output_stream_write_all(out, request,sizeof(request), &written,
 				 cm->cancellable, &err)) {
@@ -361,6 +385,7 @@ c2ip_connection_manager_add_device(C2IPConnectionManager *cm,
   dev = g_new(DeviceList,1);
   dev->type = type;
   dev->name = g_strdup(name);
+  dev->slot = slot_sequence[0];
   dev->addr = G_INET_SOCKET_ADDRESS(g_inet_socket_address_new(addr,port));
   dev->connection = NULL;
   dev->next = cm->devices;

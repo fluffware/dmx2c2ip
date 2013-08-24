@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#define REQUEST_TIMEOUT 5
+
 GQuark
 c2ip_connection_values_error_quark()
 {
@@ -43,10 +45,12 @@ struct _C2IPConnectionValues
 {
   GObject parent_instance;
   C2IPConnection *conn;
+  guint slot;
   enum SetupState setup_state;
   C2IPDevice *device;
   GTree *values;
   GSList *pending; /* Values waiting for info */
+  guint request_timeout;
 };
 
 struct _C2IPConnectionValuesClass
@@ -67,6 +71,10 @@ static void
 dispose(GObject *gobj)
 {
   C2IPConnectionValues *values = C2IP_CONNECTION_VALUES(gobj);
+  if (values->request_timeout > 0) {
+    g_source_remove(values->request_timeout);
+    values->request_timeout = 0;
+  }
   if (values->pending) {
     g_slist_free(values->pending);
     values->pending = NULL;
@@ -162,10 +170,12 @@ static void
 c2ip_connection_values_init(C2IPConnectionValues *values)
 {
   values->conn = NULL;
+  values->slot = 0;
   values->setup_state = SETUP_NONE;
   values->values = g_tree_new_full(id_cmp, NULL, NULL, g_object_unref);
   values->pending = NULL;
   values->device = c2ip_device_new();
+  values->request_timeout = 0;
 }
 
 static void
@@ -322,11 +332,11 @@ handle_value_reply(C2IPConnectionValues *values,
   C2IPFunction *v;
   guint id = C2IP_U16(&packet[5]);
   guint flags = packet[7];
-  guint type = packet[8];
+  guint type = packet[8] & C2IP_TYPE_MASK;
   guint value_flags = 0;
   v = g_tree_lookup(values->values, GSIZE_TO_POINTER(id));
   if (!v) {
-    v = c2ip_function_new(id, type & C2IP_TYPE_MASK);
+    v = c2ip_function_new(id, type);
     c2ip_function_set_device(v, values->device);
     g_signal_connect_object(v, "notify::value",
 			    (GCallback)value_object_changed ,values, 0);
@@ -413,10 +423,31 @@ handle_info_reply(C2IPConnectionValues *values,
 }
 
 static gboolean
+request_next_info(C2IPConnectionValues *values);
+
+static gboolean
+request_timed_out(gpointer user_data)
+{
+  C2IPConnectionValues *values = user_data;
+  g_debug("Request timed out");
+  if (values->pending) {
+    values->pending = g_slist_delete_link(values->pending, values->pending);
+    request_next_info(values);
+  }
+  return FALSE;
+}
+
+static gboolean
 request_next_info(C2IPConnectionValues *values)
 {
   C2IPFunction *v;
   GError *err = 0;
+  
+  if (values->request_timeout > 0) {
+    g_source_remove(values->request_timeout);
+  }
+  values->request_timeout =
+    g_timeout_add_seconds(REQUEST_TIMEOUT, request_timed_out, values);
   while(values->pending) {
     guint id;
     guint type;
@@ -479,7 +510,7 @@ received_packet(C2IPConnection *conn, guint length, const guint8 *packet,
     g_warning("Inconsistent packet length");
     return;
   }
-  if (packet_type == C2IP_PKT_TYPE_DEVICE) {
+  if (packet_type == values->slot) {
     switch(packet[4]) {
     case C2IP_REPLY_VALUE:
     case C2IP_INDICATION_VALUE:
@@ -505,6 +536,7 @@ c2ip_connection_values_new(C2IPConnection *conn)
   C2IPConnectionValues *values =
     g_object_new (C2IP_CONNECTION_VALUES_TYPE, NULL);
   values->conn = conn;
+  g_object_get(conn, "slot", &values->slot, NULL);
   g_object_ref(conn);
   g_signal_connect_object(conn, "connected", (GCallback)connected, values,0);
   g_signal_connect_object(conn, "connection-closed", (GCallback)connection_closed, values,0);

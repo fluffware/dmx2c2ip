@@ -9,6 +9,7 @@
 #include <c2ip_scan.h>
 #include <c2ip_connection_manager.h>
 #include <c2ip_connection_values.h>
+#include <c2ip_device.h>
 #include <dmx_c2ip_mapper.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
@@ -77,11 +78,8 @@ app_cleanup(AppContext* app)
 static const gchar *
 device_type_to_string(guint type)
 {
-  static gpointer enum_class = NULL;
   GEnumValue *v;
-  if (!enum_class)
-    enum_class = g_type_class_ref(C2IP_DEVICE_TYPE_ENUM_TYPE);
-  v = g_enum_get_value(enum_class, type);
+  v = g_enum_get_value(C2IP_DEVICE_TYPE_ENUM_CLASS, type);
   if (!v) return "unknown";
   return v->value_name;
 }
@@ -344,27 +342,40 @@ device_found(C2IPScan *scanner,
 static gboolean
 setup_c2ip_scanner(AppContext *app, GError **err)
 {
-  gchar *range_str;
-  GInetAddressMask *range;
-  range_str = g_key_file_get_string(app->config_file, "C2IP", "Range", err);
-  if (!range_str) {
-    g_clear_error(err);
-    g_warning("No range given. Connecting to localhost");
-    range_str = g_strdup("127.0.0.1/32");
-  }
-  range = g_inet_address_mask_new_from_string(range_str, err);
-  g_free(range_str);
-  if (!range) {
-    return FALSE;
-  }
+  gchar **addrs_str;
   app->c2ip_scanner = c2ip_scan_new();
+  addrs_str = g_key_file_get_string_list(app->config_file, "C2IP", "Addresses",
+					 NULL, err);
+  if (!addrs_str) {
+    GInetAddress *addr;
+    g_clear_error(err);
+    g_warning("No address given. Connecting to localhost");
+    addr = g_inet_address_new_loopback(G_SOCKET_FAMILY_IPV4);
+    c2ip_scan_add_address(app->c2ip_scanner, addr);
+    g_object_unref(addr);
+  } else {
+    GInetAddress *addr;
+    gchar **str = addrs_str;
+    while(*str) {
+      addr = g_inet_address_new_from_string(*str);
+      if (addr) {
+	c2ip_scan_add_address(app->c2ip_scanner, addr);
+	g_object_unref(addr);
+      } else {
+	g_warning("Invalid address %s", *str);
+      }
+      str++;
+    }
+    g_strfreev (addrs_str);
+  }
+  g_object_set(app->c2ip_scanner,
+	       "first-scan-interval", 1000,
+	       "scan-interval", 5000, NULL);
   g_signal_connect(app->c2ip_scanner, "device-found",
 		   (GCallback)device_found, app);
-  if (!c2ip_scan_start(app->c2ip_scanner, range, err)) {
-    g_object_unref(range);
+  if (!c2ip_scan_start(app->c2ip_scanner, err)) {
     return FALSE;
   }
-  g_object_unref(range);
   return TRUE;
 }
 
@@ -595,6 +606,7 @@ static void
 values_ready(C2IPConnectionValues *values, AppContext *app)
 {
   c2ip_connection_values_foreach(values, new_function_available, app);
+  g_debug("Values ready");
 }
 
 static void
@@ -606,7 +618,7 @@ c2ip_function_changed(C2IPConnectionValues *values, C2IPFunction *func,
 
 
 static void
-new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_type, const gchar *name, AppContext *app)
+new_connection(C2IPConnectionManager *cm, C2IPConnection *conn, guint device_type, const gchar *name, guint slot, AppContext *app)
 {
   C2IPDevice *dev;
   C2IPConnectionValues *values = c2ip_connection_values_new(conn);
@@ -754,6 +766,7 @@ main(int argc, char *argv[])
   }
   if (app_ctxt.config_filename) {
     app_ctxt.config_file = g_key_file_new();
+    g_key_file_set_list_separator(app_ctxt.config_file, ',');
     if (!g_key_file_load_from_file(app_ctxt.config_file,
 				   app_ctxt.config_filename,
 				   G_KEY_FILE_NONE, &err)) {

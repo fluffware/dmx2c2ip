@@ -1,8 +1,16 @@
+#ifndef __C2IP_DEVICE_H__43A3KXUZI3__
+#define __C2IP_DEVICE_H__43A3KXUZI3__
+
 #include <glib-object.h>
 
 #define C2IP_DEVICE_TYPE_ENUM_TYPE (c2ip_device_type_enum_get_type())
+#define C2IP_DEVICE_TYPE_ENUM_CLASS (c2ip_device_type_enum_get_class())
+
 GType
 c2ip_device_type_enum_get_type(void);
+
+gpointer
+c2ip_device_type_enum_get_class(void);
 
 #define C2IP_DEVICE_TYPE                  (c2ip_device_get_type ())
 #define C2IP_DEVICE(obj)                  (G_TYPE_CHECK_INSTANCE_CAST ((obj), C2IP_DEVICE_TYPE, C2IPDevice))
@@ -46,3 +54,5 @@ c2ip_device_get_device_id(const C2IPDevice *dev);
 
 const gchar *
 c2ip_device_set_device_id(C2IPDevice *dev, const gchar *id);
+
+#endif /* __C2IP_DEVICE_H__43A3KXUZI3__ */

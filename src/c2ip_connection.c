@@ -27,6 +27,7 @@ enum
   PROP_CLIENT_NAME,
   PROP_PING_REPLY,
   PROP_PING_INTERVAL,
+  PROP_SLOT,
   N_PROPERTIES
 };
 
@@ -34,6 +35,7 @@ struct _C2IPConnection
 {
   GObject parent_instance;
   gchar *client_name;
+  guint slot;
   GCancellable *cancellable;
   GSocketClient *client;
   GSocketConnection *connection;
@@ -134,6 +136,9 @@ get_property (GObject *object, guint property_id,
   case PROP_PING_INTERVAL:
     g_value_set_uint(value, conn->ping_reply);
     break;
+  case PROP_SLOT:
+    g_value_set_uint(value, conn->slot);
+    break;
   default:
     /* We don't have any other property... */
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -194,6 +199,11 @@ c2ip_connection_class_init (C2IPConnectionClass *klass)
 		      "Send pings at this interval. Set to 0 to disable.",
 		      0, 60000, 5000,
 		      G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+   properties[PROP_SLOT] =
+    g_param_spec_uint("slot", "Slot",
+		      "Slot number used as packet type",
+		      0, 100, 0,
+		      G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   g_object_class_install_properties(gobject_class, N_PROPERTIES, properties);
 }
 
@@ -207,6 +217,7 @@ c2ip_connection_init(C2IPConnection *conn)
   conn->ping_reply = TRUE;
   conn->ping_interval = 5000;
   conn->ping_timeout_id = 0;
+  conn->slot = 0;
 }
 
 static void
@@ -274,8 +285,7 @@ send_authentication(C2IPConnection *conn, const gchar *name, GError **err)
   guint8 *buffer = g_new(guint8,slen + 11);
   init_request(buffer, 0x0001, slen + 7);
   buffer[4] = 0x03;
-  buffer[5] = 0x00;
-  buffer[6] = 0x04;
+  C2IP_U16_SET(&buffer[5], conn->slot);
   buffer[7] = slen;
   memcpy(&buffer[8], name, slen);
   buffer[8+slen] = 0x05;
@@ -297,7 +307,7 @@ handle_reply(C2IPConnection *conn, const guint8 *reply, gsize plen)
       g_warning("Failed to send automatic ping reply: %s", err->message);
       g_clear_error(&err);
     }
-  } else if (conn->ping_interval > 0 && type == C2IP_PKT_TYPE_SETUP && dlen == 3 && reply[4] == C2IP_REPLY_AUTH) {
+  } else if (conn->ping_interval > 0 && type == C2IP_PKT_TYPE_SETUP && dlen >= 2 && reply[4] == C2IP_REPLY_AUTH) {
     g_signal_emit(conn, c2ip_connection_signals[CONNECTED], 0);  
     
   } else if (conn->ping_interval > 0 && type == 0x01 && dlen == 1 && reply[4] == 0x07) {
@@ -405,9 +415,10 @@ connect_callback(GObject *source_object, GAsyncResult *res, gpointer user_data)
 }
 
 C2IPConnection *
-c2ip_connection_new(GInetSocketAddress *addr)
+c2ip_connection_new(GInetSocketAddress *addr, guint slot)
 {
   C2IPConnection *conn = g_object_new (C2IP_CONNECTION_TYPE, NULL);
+  conn->slot = slot;
   conn->client = g_socket_client_new();
   g_socket_client_connect_async(conn->client, G_SOCKET_CONNECTABLE(addr),
 				conn->cancellable, connect_callback, conn);
@@ -467,6 +478,7 @@ c2ip_connection_send_value_request(C2IPConnection *conn, guint16 id,
 				   GError **err)
 {
   guint8 buffer[] = {0x00, 0x04, 0x00, 0x03, 0x04, 0x00, 0x00};
+  C2IP_U16_SET(&buffer[0], conn->slot);  
   C2IP_U16_SET(&buffer[5], id);
   return send_request(conn, buffer, sizeof(buffer), err);
 }
@@ -484,7 +496,8 @@ c2ip_connection_send_value_request(C2IPConnection *conn, guint16 id,
 gboolean
 c2ip_connection_send_value_request_all(C2IPConnection *conn, GError **err)
 {
-  static const guint8 buffer[] = {0x00, 0x04, 0x00, 0x01, 0x00};
+  guint8 buffer[] = {0x00, 0x04, 0x00, 0x01, 0x00};
+  C2IP_U16_SET(&buffer[0], conn->slot);
   return send_request(conn, buffer, sizeof(buffer), err);
 }
 
@@ -508,7 +521,7 @@ c2ip_connection_send_value_change(C2IPConnection *conn, guint16 id,
 {
   gboolean res;
   guint8 *buffer = g_new(guint8,value_length + 10);
-  init_request(buffer, 0x0004, value_length + 6);
+  init_request(buffer, conn->slot, value_length + 6);
   buffer[4] = C2IP_REQUEST_VALUE_CHANGE;
   C2IP_U16_SET(&buffer[5], id);
   buffer[7] = 0x00;
@@ -537,6 +550,7 @@ c2ip_connection_send_option_request(C2IPConnection *conn, guint16 id,
 				    GError **err)
 {
   guint8 buffer[] = {0x00, 0x04, 0x00, 0x06, 0x06, 0x00, 0x00, 0x02, 0x01, 0x00};
+  C2IP_U16_SET(&buffer[0], conn->slot);
   C2IP_U16_SET(&buffer[5], id);
   return send_request(conn, buffer, sizeof(buffer), err);
 }
@@ -557,7 +571,8 @@ gboolean
 c2ip_connection_send_info_request(C2IPConnection *conn, guint16 id,
 				  GError **err)
 {
-   guint8 buffer[] = {0x00, 0x04, 0x00, 0x06, 0x06, 0x00, 0x00, 0x05, 0x00, 0x00};
+  guint8 buffer[] = {0x00, 0x04, 0x00, 0x06, 0x06, 0x00, 0x00, 0x05, 0x00, 0x00};
+  C2IP_U16_SET(&buffer[0], conn->slot);
   C2IP_U16_SET(&buffer[5], id);
   return send_request(conn, buffer, sizeof(buffer), err);
 }

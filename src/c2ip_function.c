@@ -56,6 +56,15 @@ c2ip_function_type_enum_get_type(void)
   return type;
 }
 
+gpointer
+c2ip_function_type_enum_get_class(void)
+{
+  static gpointer gclass = NULL;
+  if (!gclass) {
+    gclass = g_type_class_ref(C2IP_FUNCTION_TYPE_ENUM_TYPE);
+  }
+  return gclass;
+}
 
 typedef struct _C2IPFunctionFlagsClass C2IPFunctionFlagsClass;
 struct _C2IPFunctionFlagsClass
@@ -107,7 +116,17 @@ c2ip_function_flags_get_type(void)
   }
   return type;
 }
-  
+
+gpointer
+c2ip_function_flags_get_class(void)
+{
+  static gpointer gclass = NULL;
+  if (!gclass) {
+    gclass = g_type_class_ref(C2IP_FUNCTION_FLAGS_TYPE);
+  }
+  return gclass;
+}
+
 enum
 {
   PROP_0 = 0,
@@ -422,7 +441,8 @@ c2ip_function_to_string(const C2IPFunction *value)
 {
   GString *str = g_string_new("");
   g_string_append_printf(str,"%d: ", value->id);
-  g_string_append(str, g_enum_get_value(g_type_class_peek(C2IP_FUNCTION_TYPE_ENUM_TYPE), value->type)->value_name);
+  g_string_append(str, g_enum_get_value(C2IP_FUNCTION_TYPE_ENUM_CLASS,
+					value->type)->value_name);
   g_string_append_c(str, ' ');
   g_string_append_c(str, (value->flags & C2IP_FUNCTION_FLAG_READABLE)?'r':'-');
   g_string_append_c(str, (value->flags & C2IP_FUNCTION_FLAG_WRITABLE)?'w':'-');
@@ -472,10 +492,11 @@ c2ip_function_get_value_type(const C2IPFunction *value)
 const gchar *
 c2ip_function_get_value_type_string(const C2IPFunction *value)
 {
-  const gchar *str = 
-    g_enum_get_value(g_type_class_peek(C2IP_FUNCTION_TYPE_ENUM_TYPE),
-		     value->type)->value_name;
-  if (!str) str = "UNKNOWN";
+  const gchar *str;
+  GEnumValue *v;
+  v = g_enum_get_value(C2IP_FUNCTION_TYPE_ENUM_CLASS, value->type);
+  if (!v) str = "UNKNOWN";
+  else str = v->value_name;
   return str;
 }
 

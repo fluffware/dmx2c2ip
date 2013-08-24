@@ -25,7 +25,7 @@ GType
 c2ip_connection_get_type(void);
 
 C2IPConnection *
-c2ip_connection_new(GInetSocketAddress *addr);
+c2ip_connection_new(GInetSocketAddress *addr, guint slot);
 
 gboolean
 c2ip_connection_send_raw_packet(C2IPConnection *conn,

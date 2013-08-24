@@ -30,7 +30,7 @@ enum
 struct _C2IPScan
 {
   GObject parent_instance;
-  GInetAddressMask *addr_range;
+  GList *addresses;
   guint port;
   GSocket *socket;
   GSource *socket_source;
@@ -38,6 +38,7 @@ struct _C2IPScan
   guint scan_interval;
   guint first_scan_interval;
   guint current_scan_interval;
+  GList *current_address;
 };
 
 struct _C2IPScanClass
@@ -58,14 +59,16 @@ dispose(GObject *gobj)
 {
   C2IPScan *scanner = C2IP_SCAN(gobj);
   c2ip_scan_stop(scanner);
-  g_clear_object(&scanner->addr_range);
+  if (scanner->addresses) {
+    g_list_free_full(scanner->addresses, g_object_unref);
+    scanner->addresses = NULL;
+  }
   G_OBJECT_CLASS(c2ip_scan_parent_class)->dispose(gobj);
 }
 
 static void
 finalize(GObject *gobj)
 {
-  /* C2IPScan *scanner = C2IP_SCAN(gobj); */
   G_OBJECT_CLASS(c2ip_scan_parent_class)->finalize(gobj);
 }
 
@@ -107,7 +110,6 @@ get_property (GObject *object, guint property_id,
   case PROP_FIRST_SCAN_INTERVAL:
     g_value_set_uint(value, scanner->first_scan_interval);
     break;
-    
   default:
     /* We don't have any other property... */
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -166,12 +168,13 @@ static void
 c2ip_scan_init(C2IPScan *scanner)
 {
   scanner->port = 1500;
-  scanner->addr_range = NULL;
+  scanner->addresses = NULL;
   scanner->socket = NULL;
   scanner->socket_source = NULL;
   scanner->timeout_id = 0;
   scanner->scan_interval = 1000;
   scanner->first_scan_interval = 100;
+  scanner->current_address = NULL;
 }
 
 
@@ -249,6 +252,7 @@ gboolean recv_callback(GSocket *socket, GIOCondition condition,
   return TRUE;
 }
 
+
 static gboolean
 timeout_callback(gpointer user_data)
 {
@@ -257,9 +261,10 @@ timeout_callback(gpointer user_data)
   GError *err = NULL;
   static const gchar request[] = {0x00,0x08, 0x00, 0x03, 0x01, 0x00, 0x00};
   C2IPScan *scanner = user_data;
-  ip_addr = g_inet_address_mask_get_address (scanner->addr_range);
+  if (!scanner->current_address) return FALSE;
+  ip_addr = scanner->current_address->data;
   socket_addr = g_inet_socket_address_new(ip_addr, scanner->port);
-  
+
   if (!g_socket_send_to(scanner->socket, socket_addr, request, sizeof(request),
 		       NULL, &err) == -1) {
     g_warning("Failed to send request: %s", err->message);
@@ -267,6 +272,11 @@ timeout_callback(gpointer user_data)
     g_clear_error(&err);
   }
   g_object_unref(socket_addr);
+  scanner->current_address = scanner->current_address->next;
+  if (scanner->current_address) return TRUE;
+
+  /* Start over */
+  scanner->current_address = scanner->addresses;
   if (scanner->current_scan_interval == scanner->scan_interval) return TRUE;
   if (scanner->scan_interval > 0) {
     scanner->timeout_id = g_timeout_add(scanner->scan_interval,
@@ -297,6 +307,21 @@ c2ip_scan_stop(C2IPScan *scanner)
 }
 
 /**
+ * Add an address to scan for devices
+ *
+ * @param scanner C2IPScan object
+ * @param addr
+ *
+ */
+
+void
+c2ip_scan_add_address(C2IPScan *scanner, GInetAddress *addr)
+{
+  scanner->addresses = g_list_prepend(scanner->addresses, addr);
+  g_object_ref(addr);
+}
+
+/**
  * Start (or restart) scanning for devices in the given range.
  *
  * @param scanner C2IPScan object
@@ -307,24 +332,21 @@ c2ip_scan_stop(C2IPScan *scanner)
  */
 
 gboolean
-c2ip_scan_start(C2IPScan *scanner, GInetAddressMask *range, GError **err)
+c2ip_scan_start(C2IPScan *scanner, GError **err)
 {
-  if (range) {
-    g_clear_object(&scanner->addr_range);
-    scanner->addr_range = range;
-    g_object_ref(range);
-  }
-  if (!scanner->addr_range) {
+  if (!scanner->addresses) {
     g_set_error(err, C2IP_SCAN_ERROR, C2IP_SCAN_ERROR_NO_RANGE,
-		"No scanning range has been set.");
+		"No addresses has been set.");
     return FALSE;
   }
   c2ip_scan_stop(scanner);
+  scanner->current_address = scanner->addresses;
   scanner->socket =
-    g_socket_new(g_inet_address_mask_get_family(scanner->addr_range),
+    g_socket_new(g_inet_address_get_family(G_INET_ADDRESS(scanner->current_address->data)),
 		 G_SOCKET_TYPE_DATAGRAM,G_SOCKET_PROTOCOL_UDP,
 		 err);
   if (!scanner->socket) return FALSE;
+  g_socket_set_broadcast(scanner->socket, TRUE);
   scanner->socket_source =
     g_socket_create_source(scanner->socket, G_IO_IN, NULL);
   g_source_set_callback(scanner->socket_source, (GSourceFunc)recv_callback,
