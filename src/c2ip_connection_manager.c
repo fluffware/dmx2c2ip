@@ -362,6 +362,7 @@ setup_next_connection(C2IPConnectionManager *cm)
   if (cm->connecting_device) return;	/* Connection already in progress */
   cm->connecting_device = dev;
   cm->client = g_socket_client_new();
+  g_socket_client_set_enable_proxy (cm->client, FALSE);
   g_socket_client_set_timeout (cm->client, 15);
   g_socket_client_connect_async(cm->client, G_SOCKET_CONNECTABLE(dev->addr),
 				cm->cancellable, connect_callback, cm);

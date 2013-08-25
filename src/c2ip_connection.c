@@ -420,6 +420,7 @@ c2ip_connection_new(GInetSocketAddress *addr, guint slot)
   C2IPConnection *conn = g_object_new (C2IP_CONNECTION_TYPE, NULL);
   conn->slot = slot;
   conn->client = g_socket_client_new();
+  g_socket_client_set_enable_proxy (conn->client, FALSE);
   g_socket_client_connect_async(conn->client, G_SOCKET_CONNECTABLE(addr),
 				conn->cancellable, connect_callback, conn);
   return conn;
