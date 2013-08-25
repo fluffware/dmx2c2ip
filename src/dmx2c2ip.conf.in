@@ -9,11 +9,11 @@ Port=8081
 #User=admin
 #Password=password
 # PAth to files served by HTTP. No trailing '/'
-Root=/home/pi/projects/dmx2c2ip/src/http_root
+Root=@localstatedir@/lib/dmx2c2ip/www
 
 [C2IP]
 # Comma separated list of addresses
 Addresses=255.255.255.255
 
 [DB]
-File=@localstatedir@/lib/dmx2c2ip/dmx2c2ip.db
+File=@localstatedir@/lib/dmx2c2ip/state.db

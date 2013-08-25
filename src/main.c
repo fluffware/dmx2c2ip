@@ -2,6 +2,8 @@
 #include <dmx_recv.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <glib-unix.h>
 #include "httpd.h"
 #include <c2ip.h>
@@ -13,6 +15,7 @@
 #include <dmx_c2ip_mapper.h>
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
+#include <syslog.h>
 
 static gboolean
 sigint_handler(gpointer user_data)
@@ -26,6 +29,9 @@ struct AppContext
 {
   char *config_filename;
   GKeyFile *config_file;
+  gboolean daemon;
+  GLogLevelFlags log_level_mask;
+  char *pid_filename;
   gchar *dmx_device;
   int dmx_speed;
   DMXRecv *dmx_recv;
@@ -38,6 +44,9 @@ struct AppContext
   
 AppContext app_ctxt  = {
   NULL,
+  NULL,
+  FALSE,
+  ~G_LOG_LEVEL_DEBUG,
   NULL,
   NULL,
   250000,
@@ -70,9 +79,16 @@ app_cleanup(AppContext* app)
   g_clear_object(&app->c2ip_connection_manager);
   g_clear_object(&app->dmx_recv);
   g_clear_object(&app->http_server);
-  g_free(app->config_filename);
   if (app->config_filename) g_key_file_unref(app->config_file);
+  g_free(app->config_filename);
   g_free(app->dmx_device);
+  if (app->pid_filename) {
+    remove(app->pid_filename);
+    g_free(app->pid_filename);
+  }
+  if (app->daemon) {
+    closelog();
+  }
 }
 
 static const gchar *
@@ -660,8 +676,8 @@ setup_db(AppContext *app, GError **err)
   if (!db_filename) {
     return FALSE;
   }
-  table = g_key_file_get_string(app->config_file, "DB", "Table", err);
-  if (!db_filename) {
+  table = g_key_file_get_string(app->config_file, "DB", "MapTable", err);
+  if (!table) {
     g_clear_error(err);
     table = g_strdup("dmx_c2ip_map");
   }
@@ -734,9 +750,109 @@ setup_mapper(AppContext *app, GError **err)
   return TRUE;
 }
 
+#define SYSLOG_IDENTITY "dmx2c2ip"
+
+static void
+syslog_handler(const gchar *log_domain, GLogLevelFlags log_level,
+	      const gchar *message, gpointer user_data)
+{
+  AppContext *app = user_data;
+  int pri = LOG_INFO;
+  if ((log_level & app->log_level_mask) != log_level) return;
+  switch(log_level)
+    {
+    case G_LOG_LEVEL_ERROR:
+      pri = LOG_CRIT;
+      break;
+    case G_LOG_LEVEL_CRITICAL:
+      pri = LOG_ERR;
+      break;
+    case G_LOG_LEVEL_WARNING:
+      pri = LOG_WARNING;
+      break;
+    case G_LOG_LEVEL_MESSAGE:
+      pri = LOG_NOTICE;
+      break;
+    case G_LOG_LEVEL_INFO:
+      pri = LOG_INFO;
+      break;
+    case G_LOG_LEVEL_DEBUG:
+      pri = LOG_DEBUG;
+      break;
+    default:
+      break;
+    }
+  syslog(pri, "%s", message);
+}
+
+static gboolean
+go_daemon(AppContext *app, GError **err)
+{
+  pid_t sid;
+  pid_t pid;
+  int pid_file;
+  openlog(SYSLOG_IDENTITY, LOG_NDELAY | LOG_PID, LOG_USER);
+  g_log_set_default_handler(syslog_handler, app);
+  g_message("Logging started");
+  
+  pid = fork();
+  if (pid < 0) {
+    g_set_error(err, G_FILE_ERROR, g_file_error_from_errno(errno),
+		"fork failed: %s", strerror(errno));
+    return FALSE;
+  }
+  
+  umask(S_IWGRP | S_IWOTH);
+
+  if (pid > 0) {
+    if (app->pid_filename) {
+      pid_file = open(app->pid_filename, O_WRONLY | O_CREAT | O_TRUNC,
+		      S_IRUSR | S_IWUSR | S_IRGRP|S_IROTH);
+      if (pid_file >= 0) {
+	char buffer[10];
+	snprintf(buffer, sizeof(buffer), "%d\n", pid);
+	if (write(pid_file, buffer, strlen(buffer)) <= 0) {
+	  g_critical("Failed to write pid file\n");
+	}
+	close(pid_file);
+      } else {
+	g_critical("Failed to open pid file: %s\n", strerror(errno));
+      }
+    }
+    exit(EXIT_SUCCESS);
+  }
+  
+
+  sid = setsid();
+  if (sid < 0) {
+    syslog(LOG_ERR, "Could not create process group\n");
+    exit(EXIT_FAILURE);
+  }
+  
+  if ((chdir("/")) < 0) {
+    syslog(LOG_ERR, "Could not change working directory to /\n");
+    exit(EXIT_FAILURE);
+  }
+
+  
+  close(STDIN_FILENO);
+  close(STDOUT_FILENO);
+  close(STDERR_FILENO);
+  g_message("Daemon detached");
+  
+ 
+  return TRUE;
+}
+
+
 const GOptionEntry app_options[] = {
   {"config-file", 'c', 0, G_OPTION_ARG_FILENAME,
    &app_ctxt.config_filename, "Configuration file", "FILE"},
+  {"daemon", 'd', 0, G_OPTION_ARG_NONE,
+   &app_ctxt.daemon, "Detach and use syslog", NULL},
+  {"pid-file", 'p', 0, G_OPTION_ARG_FILENAME,
+   &app_ctxt.pid_filename, "Create a pid file when running as daemon",
+   "FILE"},
   {NULL}
 };
 
@@ -775,32 +891,44 @@ main(int argc, char *argv[])
       return EXIT_FAILURE;
     }
   }
+  if (app_ctxt.daemon) {
+    if (!go_daemon(&app_ctxt, &err)) {
+      g_printerr("Failed to start as daemon: %s\n", err->message);
+      g_clear_error(&err);
+      app_cleanup(&app_ctxt);
+      return EXIT_FAILURE;
+    }
+  }
+
   if (!setup_db(&app_ctxt, &err)) {
-    g_printerr("Failed to setup db: %s\n", err->message);
+    g_critical("Failed to setup db: %s\n", err->message);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }
+  
   if (!setup_mapper(&app_ctxt, &err)) {
-    g_printerr("Failed to setup DMX mapper: %s\n", err->message);
+    g_critical("Failed to setup DMX mapper: %s\n", err->message);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }
   app_ctxt.dmx_device =
     g_key_file_get_string(app_ctxt.config_file, "DMXPort", "Device", &err);
   if (!app_ctxt.dmx_device) {
-    g_printerr("No device: %s, DMX disabled\n", err->message);
+    g_warning("No device: %s, DMX disabled\n", err->message);
     g_clear_error(&err);
   } else {
+    g_assert(err == NULL);
     app_ctxt.dmx_speed =
       g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "Speed", &err);
     if (err) {
+      g_message("Using default speed 250kbps");
       app_ctxt.dmx_speed = 250000;
       g_clear_error(&err);
     }
-    
+    g_assert(err == NULL);
     app_ctxt.dmx_recv = dmx_recv_new(app_ctxt.dmx_device, &err);
     if (!app_ctxt.dmx_recv) {
-      g_printerr("Failed setup DMX port: %s\n", err->message);
+      g_critical("Failed setup DMX port: %s\n", err->message);
       app_cleanup(&app_ctxt);
       return EXIT_FAILURE;
     }
@@ -810,31 +938,33 @@ main(int argc, char *argv[])
   app_ctxt.http_server = http_server_new();
   configure_http_server(&app_ctxt);
   if (!http_server_start(app_ctxt.http_server, &err)) {
-    g_printerr("Failed to setup HTTP server: %s\n", err->message);
+    g_critical("Failed to setup HTTP server: %s\n", err->message);
     g_clear_object(&app_ctxt.http_server);
     g_clear_error(&err);
+    return EXIT_FAILURE;
   }
   
   if (!setup_c2ip(&app_ctxt, &err)) {
-    g_printerr("Failed to set up C2IP: %s\n", err->message);
-     g_clear_error(&err);
+    g_critical("Failed to set up C2IP: %s\n", err->message);
+    g_clear_error(&err);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }
 
   if (!dmx_c2ip_mapper_read_db(app_ctxt.mapper,
 			       app_ctxt.db, "dmx_c2ip_map", &err)) {
-    g_printerr("Failed reading mappings: %s\n", err->message);
+    g_critical("Failed reading mappings: %s\n", err->message);
     g_clear_error(&err);
     app_cleanup(&app_ctxt);
     return EXIT_FAILURE;
   }
   loop = g_main_loop_new(NULL, FALSE);
   g_unix_signal_add(SIGINT, sigint_handler, loop);
+  g_unix_signal_add(SIGTERM, sigint_handler, loop);
   g_debug("Starting");
   g_main_loop_run(loop);
   g_main_loop_unref(loop);
-  g_debug("Exiting");
+  g_message("Exiting");
   app_cleanup(&app_ctxt);
 #ifdef MEMPROFILE
   g_mem_profile ();

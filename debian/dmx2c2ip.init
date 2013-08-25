@@ -15,7 +15,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC=dmx2c2ip             # Introduce a short description here
 NAME=dmx2c2ip             # Introduce the short server's name here
 DAEMON=/usr/bin/dmx2c2ip # Introduce the server's location here
-DAEMON_ARGS="-c /etc/dmx2c2ip.conf"             # Arguments to run the daemon with
+DAEMON_ARGS="-c /etc/dmx2c2ip.conf -p /var/run/dmx2c2ip.pid --daemon"
 PIDFILE=/var/run/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 
