@@ -152,7 +152,7 @@ send_packet_signal(gpointer fdata)
   guint b;
   g_rw_lock_reader_lock (&recv->read_buffer_lock);
   b = recv->recv_buffer ^ 1;
-  g_signal_emit_by_name(recv, "new-packet", 0,
+  g_signal_emit_by_name(recv, "new-packet",
 			recv->buffer_length[b],
 			recv->buffers[b]);
   memset(recv->change_bits, 0, MAX_BUFFER/sizeof(guint8));
