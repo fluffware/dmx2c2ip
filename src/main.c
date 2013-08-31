@@ -1,5 +1,6 @@
 #include <stdio.h>
-#include <dmx_recv.h>
+#include <serial_dmx_recv.h>
+#include <ola_dmx_recv.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -34,6 +35,7 @@ struct AppContext
   char *pid_filename;
   gchar *dmx_device;
   int dmx_speed;
+  guint ola_universe;
   DMXRecv *dmx_recv;
   HTTPServer *http_server;
   C2IPScan *c2ip_scanner;
@@ -50,6 +52,7 @@ AppContext app_ctxt  = {
   NULL,
   NULL,
   250000,
+  0,
   NULL,
   NULL,
   NULL,
@@ -914,21 +917,41 @@ main(int argc, char *argv[])
   app_ctxt.dmx_device =
     g_key_file_get_string(app_ctxt.config_file, "DMXPort", "Device", &err);
   if (!app_ctxt.dmx_device) {
-    g_warning("No device: %s, DMX disabled\n", err->message);
+    if (!g_error_matches(err, G_KEY_FILE_ERROR,
+			 G_KEY_FILE_ERROR_KEY_NOT_FOUND)) {
+      g_warning("Failed to parse DMXPort: %s", err->message);
+    }
     g_clear_error(&err);
+  }
+  app_ctxt.ola_universe =
+    g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "OLAUniverse",
+			   &err);
+  if (!app_ctxt.ola_universe) {
+    if (!g_error_matches(err, G_KEY_FILE_ERROR,
+			 G_KEY_FILE_ERROR_KEY_NOT_FOUND)) {
+      g_warning("Failed to parse OLAUniverse: %s", err->message);
+    }
+    g_clear_error(&err);
+  }
+  if (!app_ctxt.dmx_device && ! app_ctxt.ola_universe) {
+    g_warning("No port or universe. DMX disabled");
   } else {
     g_assert(err == NULL);
-    app_ctxt.dmx_speed =
-      g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "Speed", &err);
-    if (err) {
-      g_message("Using default speed 250kbps");
-      app_ctxt.dmx_speed = 250000;
-      g_clear_error(&err);
+    if (app_ctxt.dmx_device) {
+      app_ctxt.dmx_speed =
+	g_key_file_get_integer(app_ctxt.config_file, "DMXPort", "Speed", &err);
+      if (err) {
+	g_message("Using default speed 250kbps");
+	app_ctxt.dmx_speed = 250000;
+	g_clear_error(&err);
+      }
+      app_ctxt.dmx_recv = serial_dmx_recv_new(app_ctxt.dmx_device, &err);
+    } else {
+      app_ctxt.dmx_recv = ola_dmx_recv_new(app_ctxt.ola_universe, &err);
     }
-    g_assert(err == NULL);
-    app_ctxt.dmx_recv = dmx_recv_new(app_ctxt.dmx_device, &err);
     if (!app_ctxt.dmx_recv) {
       g_critical("Failed setup DMX port: %s\n", err->message);
+      g_clear_error(&err);
       app_cleanup(&app_ctxt);
       return EXIT_FAILURE;
     }

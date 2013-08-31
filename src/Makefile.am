@@ -1,13 +1,18 @@
 SUBDIRS=http_root
 
 AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@ -Wno-long-long
+AM_CXXFLAGS = @OLA_CXXFLAGS@ @GLIB_CFLAGS@ -Wno-long-long
 
 noinst_PROGRAMS = dmx_send c2ip_tool
 bin_PROGRAMS = dmx2c2ip
 
 dmx2c2ip_SOURCES = main.c \
 dmx_recv.c dmx_recv.h \
+buffered_dmx_recv.c buffered_dmx_recv.h buffered_dmx_recv_private.h \
+ola_dmx_recv.c ola_dmx_recv.h \
+serial_dmx_recv.c serial_dmx_recv.h \
 dmx_serial.c dmx_serial.h \
+ola_wrapper.cpp ola_wrapper.h \
 httpd.c httpd.h \
 c2ip_scan.c c2ip_scan.h c2ip_scan_marshal.c c2ip_scan_marshal.h \
 c2ip_connection_manager.c c2ip_connection_manager.h \
@@ -23,7 +28,7 @@ dmx_c2ip_mapper.c dmx_c2ip_mapper.h \
 dmx_c2ip_mapper_marshal.c dmx_c2ip_mapper_marshal.h
 
 
-dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ -lm
+dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ @OLA_LIBS@ -lm
 
 dmx_send_sources = dmx_send.c
 
