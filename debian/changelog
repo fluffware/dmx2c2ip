@@ -1,3 +1,9 @@
+dmx2c2ip (0.2) unstable; urgency=low
+
+  * Added OLA support.
+
+ -- Simon Berg <ksb@mosse>  Sat, 31 Aug 2013 23:47:18 +0200
+
 dmx2c2ip (0.1) unstable; urgency=low
 
   * Initial Release.
