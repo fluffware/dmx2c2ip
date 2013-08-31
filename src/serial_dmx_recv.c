@@ -6,6 +6,7 @@
 #include <dmx_serial.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <buffered_dmx_recv_private.h>
 
 #define STATE_NORMAL (1<<0)
 #define STATE_ESCAPE (1<<1)
@@ -17,23 +18,12 @@
 
 struct _SerialDMXRecv
 {
-  GObject parent_instance;
+  BufferedDMXRecv parent_instance;
   int serial_fd;
   gint source;
   guint state;
-  guint8 buffers[2][MAX_BUFFER];
-  /* Which of above buffers is currently being used for receiving. The
-     other one is available for reading by the user from the
-     new-packet signal handler. */
-  guint recv_buffer;
-  guint buffer_length[2];
-  /* A bit array indicating if a channel has changed since last signal
-     emission */
-#define MAX_CHANGE_BIT_WORDS ((MAX_BUFFER+sizeof(guint32)-1) / sizeof(guint32))
-  guint32 change_bits[MAX_CHANGE_BIT_WORDS];
-  /* Context of thread creating this object, used for emitting signals */
-  GMainContext *creator_main_context;
-  
+  guint8 read_buffer[MAX_BUFFER];
+  gsize read_length;
   GThread *read_thread;
   /* Created by and destroyed by the read thread */
   GMainLoop *read_main_loop;
@@ -46,22 +36,14 @@ struct _SerialDMXRecv
 
 struct _SerialDMXRecvClass
 {
-  GObjectClass parent_class;
+  BufferedDMXRecvClass parent_class;
 
   /* class members */
 
 };
 
-static gboolean
-serial_dmx_recv_channels_changed(DMXRecv *recv, guint from, guint to);
-
-static void
-dmx_recv_init(DMXRecvInterface *iface) {
-  iface->channels_changed = serial_dmx_recv_channels_changed;
-}
-
-G_DEFINE_TYPE_WITH_CODE (SerialDMXRecv, serial_dmx_recv, G_TYPE_OBJECT,
-			 G_IMPLEMENT_INTERFACE(DMX_RECV_TYPE, dmx_recv_init))
+G_DEFINE_TYPE (SerialDMXRecv, serial_dmx_recv, BUFFERED_DMX_RECV_TYPE)
+	
 
 
 static gpointer read_thread(gpointer data);
@@ -108,10 +90,7 @@ dispose(GObject *gobj)
     close(recv->serial_fd);
     recv->serial_fd = -1;
   }
-  if (recv->creator_main_context) {
-    g_main_context_unref(recv->creator_main_context);
-    recv->creator_main_context = NULL;
-  }
+ 
   G_OBJECT_CLASS(serial_dmx_recv_parent_class)->dispose(gobj);
 }
 
@@ -135,94 +114,13 @@ serial_dmx_recv_init (SerialDMXRecv *self)
   self->serial_fd = -1;
   self->source = 0;
   self->state = STATE_NORMAL;
-  self->recv_buffer = 0;
-  self->buffer_length[0] = 0;
-  self->buffer_length[1] = 0;
   self->read_main_loop = NULL;
   self->read_main_context = NULL;
-  self->creator_main_context = g_main_context_ref_thread_default();
-  memset(self->change_bits, ~0, MAX_BUFFER/sizeof(guint8));
   self->frame_count = 0;
+  self->read_length = 0;
 }
 
-static gboolean
-send_packet_signal(gpointer fdata)
-{
-  SerialDMXRecv *recv = fdata;
-  guint b;
-  g_rw_lock_reader_lock (&recv->read_buffer_lock);
-  b = recv->recv_buffer ^ 1;
-  g_signal_emit_by_name(recv, "new-packet",
-			recv->buffer_length[b],
-			recv->buffers[b]);
-  memset(recv->change_bits, 0, MAX_BUFFER/sizeof(guint8));
-  g_rw_lock_reader_unlock (&recv->read_buffer_lock);
-  return FALSE;
-}
 
-/* Sets a bit for every data byte that has changed. Returns true if
-   there are changes. */
-static guint
-signal_changes(SerialDMXRecv *recv)
-{
-  guint pos = 0;
-  guint rb = recv->recv_buffer;
-  guint8 *new_data = &recv->buffers[rb][pos];
-  guint new_length = recv->buffer_length[rb];
-  guint8 *old_data = &recv->buffers[rb ^ 1][pos];
-  guint old_length = recv->buffer_length[rb ^ 1];
-  while(pos < new_length) {
-    if (pos >= old_length || *new_data != *old_data) {
-      recv->change_bits[pos/32] |= 1<<(pos % 32);
-    }
-    new_data++;
-    old_data++;
-    pos++;
-  }
-  for(pos = 0; pos < MAX_CHANGE_BIT_WORDS; pos++) {
-    if (recv->change_bits[pos] != 0) return TRUE;
-  }
-  return FALSE;
-}
-
-/**
- * serial_dmx_recv_channels_changed:
- * @recv: a SerialDMXRecv object
- * @from: check from this channel, inclusive
- * @to: check up to this channel, exclusive
- *
- * Check if any channel in the range [@to - @from[ has changed since last
- * signal emission.
- *
- * Returns: TRUE if any channel in the range has changed.
- */
-
-/* Set all bits below the given bit position */
-#define LOW_MASK(b) ((((guint32)1) <<(b))-1)
-/* Set all bits above and including the given bit position */
-#define HIGH_MASK(b) (~LOW_MASK(b))
-
-static gboolean
-serial_dmx_recv_channels_changed(DMXRecv *base, guint from, guint to)
-{
-  SerialDMXRecv *recv = SERIAL_DMX_RECV(base);
-  guint pos;
-  guint end;
-  guint b = recv->recv_buffer ^ 1;
-  if (to > recv->buffer_length[b]) to = recv->buffer_length[b];
-  if (from >= to) return FALSE;
-  pos = from / 32;
-  from %= 32;
-  end = to /32;
-  to %= 32;
-  if (pos == end) {
-    return recv->change_bits[pos] & (HIGH_MASK(from) & LOW_MASK(to));
-  } else {
-    if (recv->change_bits[pos] & HIGH_MASK(from)) return TRUE;
-    while(++pos < end) if (recv->change_bits[pos] != 0) return TRUE;
-    return recv->change_bits[end] & LOW_MASK(to);
-  }
-}
 /* Decode received data and put it in the right buffer. Switch buffer on break.
  */
 static void
@@ -237,24 +135,13 @@ handle_data(SerialDMXRecv *recv, const uint8_t *data, gsize data_length)
       state &= ~STATE_FIRST;
     } else if (state & STATE_FRAMING) {
       if (c == 0x00) {
-	GSource *source;
-	/* If the signal handlers are busy just skip and wait for the next
-	   packet. */
-	if (g_rw_lock_writer_trylock (&recv->read_buffer_lock)) {
-	  recv->recv_buffer ^= 1;  /* Switch buffer */
-	  if (recv->frame_count > 2 && signal_changes(recv)) {
-	    
-	    source = g_idle_source_new();
-	    g_object_ref(recv);
-	    g_source_set_callback(source, send_packet_signal, recv,g_object_unref);
-	    g_source_attach(source, recv->creator_main_context);
-	  }
-	  g_rw_lock_writer_unlock(&recv->read_buffer_lock);
-	}
-	recv->frame_count++;
-	recv->buffer_length[recv->recv_buffer] = 0;
 	
-
+	if (recv->read_length > 0) {
+	  buffered_dmx_recv_queue(&recv->parent_instance,
+				  recv->read_buffer, recv->read_length);
+	  recv->frame_count++;
+	  recv->read_length = 0;
+	}
 	state &= ~STATE_SKIP;
 	state |= STATE_FIRST;
       }
@@ -266,10 +153,9 @@ handle_data(SerialDMXRecv *recv, const uint8_t *data, gsize data_length)
     } else if (state & STATE_SKIP) {
       /* Do nothing */
     } else {
-      guint rb = recv->recv_buffer;
       state &= ~(STATE_ESCAPE | STATE_FRAMING|STATE_FIRST);
-      if (recv->buffer_length[rb] < MAX_BUFFER) {
-	recv->buffers[rb][recv->buffer_length[rb]++] = c;
+      if (recv->read_length < MAX_BUFFER) {
+	recv->read_buffer[recv->read_length++] = c;
       } else {
 	state |= STATE_SKIP;
       }

@@ -25,10 +25,10 @@ dispose(GObject *gobj)
     g_main_context_unref(recv->creator_main_context);
     recv->creator_main_context = NULL;
   }
-  g_free(recv->read_buffer);
-  recv->read_buffer = NULL;
-  g_free(recv->write_buffer);
-  recv->write_buffer = NULL;
+  g_free(recv->user_buffer);
+  recv->user_buffer = NULL;
+  g_free(recv->queue_buffer);
+  recv->queue_buffer = NULL;
   G_OBJECT_CLASS(buffered_dmx_recv_parent_class)->dispose(gobj);
 }
 
@@ -51,10 +51,10 @@ buffered_dmx_recv_class_init (BufferedDMXRecvClass *klass)
 static void
 buffered_dmx_recv_init (BufferedDMXRecv *self)
 {
-  self->read_length = 0;
-  self->write_buffer = g_new(guint8, MAX_BUFFER);
-  self->write_length = 0;
-  self->read_buffer = g_new(guint8, MAX_BUFFER);
+  self->user_length = 0;
+  self->queue_buffer = g_new(guint8, MAX_BUFFER);
+  self->queue_length = 0;
+  self->user_buffer = g_new(guint8, MAX_BUFFER);
   self->creator_main_context = g_main_context_ref_thread_default();
   memset(self->change_bits, ~0, MAX_BUFFER/sizeof(guint8));
   g_mutex_init (&self->buffer_mutex);
@@ -64,12 +64,12 @@ static void
 swap_buffers(BufferedDMXRecv *recv)
 {
   gsize tl;
-  guint8 *tb =recv->read_buffer;
-  recv->read_buffer = recv->write_buffer;
-  recv->write_buffer = tb;
-  tl = recv->read_length;
-  recv->read_length = recv->write_length;
-  recv->write_length = tl;
+  guint8 *tb =recv->user_buffer;
+  recv->user_buffer = recv->queue_buffer;
+  recv->queue_buffer = tb;
+  tl = recv->user_length;
+  recv->user_length = recv->queue_length;
+  recv->queue_length = tl;
 }
 
 /* Sets a bit for every data byte that has changed. Returns true if
@@ -78,10 +78,10 @@ static guint
 channels_changed(BufferedDMXRecv *recv)
 {
   guint pos = 0;
-  guint8 *new_data = recv->write_buffer;
-  guint new_length = recv->write_length;
-  guint8 *old_data = recv->read_buffer;
-  guint old_length = recv->read_length;
+  guint8 *new_data = recv->queue_buffer;
+  guint new_length = recv->queue_length;
+  guint8 *old_data = recv->user_buffer;
+  guint old_length = recv->user_length;
   while(pos < new_length) {
     if (pos >= old_length || *new_data != *old_data) {
       recv->change_bits[pos/32] |= 1<<(pos % 32);
@@ -102,7 +102,10 @@ send_packet_signal(gpointer fdata)
   BufferedDMXRecv *recv = fdata;
   
   /* If the buffer is locked then try again later */
-  if (!g_mutex_trylock(&recv->buffer_mutex)) return TRUE;
+  if (!g_mutex_trylock(&recv->buffer_mutex)) {
+    g_debug("Delayed signaling");
+    return TRUE;
+  }
   recv->idle_source = NULL;
   if (!channels_changed(recv)) {
     /* Nothing changed */
@@ -111,8 +114,9 @@ send_packet_signal(gpointer fdata)
   }
   swap_buffers(recv);
   g_mutex_unlock(&recv->buffer_mutex);
+   g_debug("Signal sent");
   g_signal_emit_by_name(recv, "new-packet",
-			recv->read_length, recv->read_buffer);
+			recv->user_length, recv->user_buffer);
   memset(recv->change_bits, 0, MAX_BUFFER/sizeof(guint8));
   return FALSE;
 }
@@ -141,7 +145,7 @@ buffered_dmx_recv_channels_changed(DMXRecv *base, guint from, guint to)
   BufferedDMXRecv *recv = BUFFERED_DMX_RECV(base);
   guint pos;
   guint end;
-  if (to > recv->read_length) to = recv->read_length;
+  if (to > recv->user_length) to = recv->user_length;
   if (from >= to) return FALSE;
   pos = from / 32;
   from %= 32;
@@ -156,23 +160,21 @@ buffered_dmx_recv_channels_changed(DMXRecv *base, guint from, guint to)
   }
 }
 
-guint8*
-buffered_dmx_recv_start_write(BufferedDMXRecv *recv)
+void
+buffered_dmx_recv_queue(BufferedDMXRecv *recv,
+			const guint8 *data, gsize length)
 {
   g_mutex_lock(&recv->buffer_mutex);
-  return recv->write_buffer;
-}
-
-void
-buffered_dmx_recv_end_write(BufferedDMXRecv *recv, gsize len)
-{
-  recv->write_length = len;
+  memcpy(recv->queue_buffer, data, length);
+  recv->queue_length = length;
   if (!recv->idle_source) {
     recv->idle_source = g_idle_source_new();
     g_object_ref(recv);
+    g_mutex_unlock(&recv->buffer_mutex);
     g_source_set_callback(recv->idle_source, send_packet_signal, recv,
 			  g_object_unref);
     g_source_attach(recv->idle_source, recv->creator_main_context);    
+  } else {
+    g_mutex_unlock(&recv->buffer_mutex);
   }
-  g_mutex_unlock(&recv->buffer_mutex);
 }

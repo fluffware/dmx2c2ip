@@ -67,9 +67,7 @@ new_packet(const guint8 *data, gsize len, gpointer user_data)
 {
   guint8 *buffer;
   BufferedDMXRecv *recv = user_data;
-  buffer = buffered_dmx_recv_start_write(recv);
-  memcpy(buffer, data, len);
-  buffered_dmx_recv_end_write(recv, len);
+  buffered_dmx_recv_queue(recv, data, len);
 }
 
 static gpointer

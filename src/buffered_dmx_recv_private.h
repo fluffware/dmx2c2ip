@@ -8,10 +8,10 @@
 struct _BufferedDMXRecv
 {
   GObject parent_instance;
-  guint8 *read_buffer;
-  gsize read_length;
-  guint8 *write_buffer;
-  gsize write_length;
+  guint8 *user_buffer;
+  gsize user_length;
+  guint8 *queue_buffer;
+  gsize queue_length;
   
   /* A bit array indicating if a channel has changed since last signal
      emission */
@@ -37,10 +37,8 @@ struct _BufferedDMXRecvClass
   /* class members */
 };
 
-guint8*
-buffered_dmx_recv_start_write(BufferedDMXRecv *recv);
-
 void
-buffered_dmx_recv_end_write(BufferedDMXRecv *recv, gsize len);
+buffered_dmx_recv_queue(BufferedDMXRecv *recv,
+			const guint8 *data, gsize length);
 
 #endif /* __BUFFERD_DMX_RECV_PRIVATE_H__7F90RFGJ4V__ */
