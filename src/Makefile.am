@@ -9,10 +9,8 @@ bin_PROGRAMS = dmx2c2ip
 dmx2c2ip_SOURCES = main.c \
 dmx_recv.c dmx_recv.h \
 buffered_dmx_recv.c buffered_dmx_recv.h buffered_dmx_recv_private.h \
-ola_dmx_recv.c ola_dmx_recv.h \
 serial_dmx_recv.c serial_dmx_recv.h \
 dmx_serial.c dmx_serial.h \
-ola_wrapper.cpp ola_wrapper.h \
 httpd.c httpd.h \
 c2ip_scan.c c2ip_scan.h c2ip_scan_marshal.c c2ip_scan_marshal.h \
 c2ip_connection_manager.c c2ip_connection_manager.h \
@@ -26,6 +24,10 @@ c2ip_strings.c c2ip_strings.h \
 sqlite/sqlite3.c sqlite/sqlite3.h \
 dmx_c2ip_mapper.c dmx_c2ip_mapper.h \
 dmx_c2ip_mapper_marshal.c dmx_c2ip_mapper_marshal.h
+
+if WITH_OLA 
+dmx2c2ip_SOURCES += ola_dmx_recv.c ola_dmx_recv.h ola_wrapper.cpp ola_wrapper.h 
+endif
 
 
 dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ @OLA_LIBS@ -lm

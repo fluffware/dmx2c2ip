@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <serial_dmx_recv.h>
-#include <ola_dmx_recv.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
@@ -17,6 +16,14 @@
 #include <json-glib/json-glib.h>
 #include <json-glib/json-glib.h>
 #include <syslog.h>
+
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
+#ifdef WITH_OLA
+#include <ola_dmx_recv.h>
+#endif
 
 static gboolean
 sigint_handler(gpointer user_data)
@@ -947,10 +954,16 @@ main(int argc, char *argv[])
       }
       app_ctxt.dmx_recv = serial_dmx_recv_new(app_ctxt.dmx_device, &err);
     } else {
+#ifdef WITH_OLA
       app_ctxt.dmx_recv = ola_dmx_recv_new(app_ctxt.ola_universe, &err);
+#else
+      g_critical("Program not built with OLA support");
+      app_cleanup(&app_ctxt);
+      return EXIT_FAILURE;
+#endif
     }
     if (!app_ctxt.dmx_recv) {
-      g_critical("Failed setup DMX port: %s\n", err->message);
+      g_critical("Failed setup DMX port: %s", err->message);
       g_clear_error(&err);
       app_cleanup(&app_ctxt);
       return EXIT_FAILURE;

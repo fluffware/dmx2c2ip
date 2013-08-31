@@ -27,6 +27,11 @@ else
 AC_MSG_RESULT([not found])
 fi
 
+AC_ARG_WITH([ola],[AS_HELP_STRING([--with-ola], [OLA support])],
+            [],
+	    [with_ola=check])
+AS_IF([test x$with_ola != xno],
+[
 # Check for OLA
 AC_MSG_CHECKING([for OLA library]) 
 if pkg-config libola --exists; then
@@ -36,10 +41,14 @@ OLA_LIBS=`pkg-config libola --libs`
 AC_SUBST(OLA_LIBS)
 OLA_VERSION=`pkg-config libola --modversion`;
 AC_MSG_RESULT(${OLA_VERSION});
+AC_DEFINE([WITH_OLA],[1],[Define if you have OLA libraries])
+with_ola=yes
 else
 AC_MSG_RESULT([not found])
+with_ola=no
 fi
-
+])
+AM_CONDITIONAL([WITH_OLA], [test x$with_ola = xyes])
 
 AC_CONFIG_FILES([Makefile src/Makefile src/dmx2c2ip.conf src/http_root/Makefile])
 AC_OUTPUT
