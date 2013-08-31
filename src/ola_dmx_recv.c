@@ -65,7 +65,6 @@ ola_dmx_recv_init (OLADMXRecv *self)
 static void
 new_packet(const guint8 *data, gsize len, gpointer user_data)
 {
-  guint8 *buffer;
   BufferedDMXRecv *recv = user_data;
   buffered_dmx_recv_queue(recv, data, len);
 }
