@@ -334,6 +334,8 @@ configure_http_server(AppContext *app)
 			    app_ctxt.config_file, "HTTP", "Password");
   configure_string_property(app->http_server, "http-root",
 			    app_ctxt.config_file, "HTTP", "Root");
+  configure_string_property(app->http_server, "root-file",
+			    app_ctxt.config_file, "HTTP", "RootFile");
   
   g_signal_connect(app->http_server, "value-changed", (GCallback)http_value_changed, app);
 }

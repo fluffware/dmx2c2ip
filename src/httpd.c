@@ -41,6 +41,7 @@ enum
   PROP_USER,
   PROP_PASSWORD,
   PROP_HTTP_ROOT,
+  PROP_ROOT_FILE,
   PROP_HTTP_SETS_VALUES,
   PROP_USER_CHANGES_SIGNALED,
   N_PROPERTIES
@@ -55,6 +56,7 @@ struct _HTTPServer
   gchar *password;
   guint port;
   gchar *http_root;
+  gchar *root_file; /* File served when accessing the root */
   gboolean http_sets_values;
   gboolean user_changes_signaled;
   
@@ -111,8 +113,13 @@ dispose(GObject *gobj)
     server->value_root = NULL;
   }
   g_free(server->user);
+  server->user = NULL;
   g_free(server->password);
+  server->password = NULL;
   g_free(server->http_root);
+  server->http_root = NULL;
+  g_free(server->root_file);
+  server->root_file = NULL;
   g_datalist_clear(&server->pending_changes);
   if (server->signal_idle_source) {
     g_source_destroy(server->signal_idle_source);
@@ -159,6 +166,10 @@ set_property (GObject *object, guint property_id,
       g_free(server->http_root);
       server->http_root = g_value_dup_string(value);
       break;
+    case PROP_ROOT_FILE:
+      g_free(server->root_file);
+      server->root_file = g_value_dup_string(value);
+      break;
     case PROP_HTTP_SETS_VALUES:
       server->http_sets_values = g_value_get_boolean(value);
       break;
@@ -189,6 +200,9 @@ get_property (GObject *object, guint property_id,
     break;
   case PROP_HTTP_ROOT:
     g_value_set_string(value, server->http_root);
+    break;
+  case PROP_ROOT_FILE:
+    g_value_set_string(value, server->root_file);
     break;
   case PROP_HTTP_SETS_VALUES:
     g_value_set_boolean(value, server->http_sets_values);
@@ -234,6 +248,10 @@ http_server_class_init (HTTPServerClass *klass)
   properties[PROP_HTTP_ROOT]
     =  g_param_spec_string("http-root", "HTTP root", "Root directory",
 			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
+  properties[PROP_ROOT_FILE]
+    =  g_param_spec_string("root-file", "Root file",
+			   "File served for root access.",
+			   NULL, G_PARAM_READWRITE |G_PARAM_STATIC_STRINGS);
   properties[PROP_HTTP_SETS_VALUES]
     =  g_param_spec_boolean("http-sets-values", "HTTP sets values",
 			    "If true the JSON values are directly changed "
@@ -263,6 +281,7 @@ http_server_init(HTTPServer *server)
   server->password = NULL;
   server->port = 8080;
   server->http_root = NULL;
+  server->root_file = NULL;
   server->http_sets_values = TRUE;
   server->user_changes_signaled = TRUE;
   g_datalist_init(&server->json_nodes);
@@ -354,7 +373,7 @@ error_response(struct MHD_Connection * connection,
 
   resp = MHD_create_response_from_callback(strlen(resp_str), 1024, string_content_handler, resp_str, string_content_handler_free);
   MHD_add_response_header(resp, "Content-Type",
-			   "text/html; UTF-8");
+			   "text/html;charset=UTF-8");
   MHD_queue_response(connection, response, resp);
   MHD_destroy_response(resp);
   return MHD_YES;
@@ -440,8 +459,13 @@ static int
 file_response(HTTPServer *server,
 	      struct MHD_Connection * connection, const char *url)
 {
-  if (server->http_root && check_filename(url)) {
-    int fd;
+  if (server->http_root) {
+    if (url[0] == '\0') {
+      if (server->root_file)
+	url = server->root_file;
+    }
+    if (check_filename(url)) {
+      int fd;
       gchar * filename = g_build_filename(server->http_root, url, NULL);
       fd = open(filename, O_RDONLY);
       if (fd < 0) {
@@ -461,6 +485,7 @@ file_response(HTTPServer *server,
 	}
       }
       g_free(filename);
+    }
   }
   error_response(connection, MHD_HTTP_NOT_FOUND, "Not Found", NULL);
   return MHD_YES;
