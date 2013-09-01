@@ -1,0 +1,73 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html  PUBLIC '-//W3C//DTD XHTML 1.0 Strict//EN' 
+ 'http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd'>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <head>
+    <title>DMX map</title>
+    <script type="application/javascript" src="json_util.js">
+    </script>
+    <script type="application/javascript" src="C2IP.js">
+    </script>
+    <script type="application/javascript" src="jquery_min.js">
+    </script>
+    <script type="application/javascript">
+      upd = 0;
+      function select_device(p)
+      {     
+          if (upd) upd.stop();
+      	  ExpandTable( $('#map_table'),'values/dmxmap/'+p, '');
+	  FillTable( $('#map_table'), 'values/functions/attributes/'+p,'.attribute');
+	  upd = new FieldUpdate('values/dmxmap/'+p, $('#map_table'));
+	  upd.start();
+      }
+
+      function setup_page()
+      {
+      params = get_query_params(document.URL);
+      if (params.id == undefined || params.type == undefined) {
+          SetDeviceOptions('values/dmxmap',$('#device_select'),
+	                   select_device);
+      } else {
+          $('#device_select').hide();
+	  $('#device_label').text(device_label(params.id, params.type));
+	  var p = params.id+'/'+params.type;
+	  select_device(p);
+      }
+      }
+
+      function device_selected()
+      {
+      select_device($('#device_select :selected').val());
+      }
+    </script>
+  </head>
+  <body onload="setup_page()">
+    <h1>DMX map</h1>
+    <form action="#">
+      <p>
+	<select id="device_select" name="device" onchange="device_selected()">
+	  <option value=""></option>
+	</select>
+      </p>
+    </form>
+    <h2 id="device_label"/>
+    <form action="#">
+      <table id="map_table">
+	<tr>
+	  <th align="left">Function ID</th>
+	  <th align="left">Function name</th>
+	  <th align="left">Channel (0=disabled)</th>
+	  <th align="left">Min</th>
+	  <th align="left">Max</th>
+	</tr>
+	<tr class="template">
+	  <td class="replace-content">id</td>
+	  <td class="replace-content attribute">name</td>
+	  <td><input class="set-path" path-suffix="channel" name="channel"/></td>
+	  <td><input class="set-path" path-suffix="min" name="min"/></td>
+	  <td><input class="set-path" path-suffix="max" name="max"/></td>
+	</tr>
+      </table>
+    </form>
+  </body>
+</html>
