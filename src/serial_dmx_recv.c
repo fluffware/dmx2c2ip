@@ -225,6 +225,7 @@ read_thread(gpointer data)
   source->recv = recv;
   g_source_add_poll(&source->source, &((struct DMXSource*)source)->pollfd);
   recv->source = g_source_attach(&source->source,  recv->read_main_context);
+  g_source_unref(&source->source);
   g_debug("Read thread started");
   g_main_loop_run(recv->read_main_loop);
   g_debug("Read thread stopped");

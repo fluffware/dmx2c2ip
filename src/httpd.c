@@ -123,7 +123,8 @@ dispose(GObject *gobj)
   g_datalist_clear(&server->pending_changes);
   if (server->signal_idle_source) {
     g_source_destroy(server->signal_idle_source);
-      server->signal_idle_source= NULL;
+    g_source_unref(server->signal_idle_source);
+    server->signal_idle_source= NULL;
   }
   if (server->signal_context) {
     g_main_context_unref(server->signal_context);
@@ -318,6 +319,7 @@ idle_notify_modification(gpointer user_data)
      the server can use it for new updates. */
   pending = server->pending_changes;
   g_datalist_init(&server->pending_changes);
+  g_source_unref(server->signal_idle_source);
   server->signal_idle_source = NULL;
   /* Don't need the lock anymore since we have a private copy of the list. */
   g_mutex_unlock(&server->signal_lock);

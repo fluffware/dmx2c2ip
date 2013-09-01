@@ -19,6 +19,7 @@ dispose(GObject *gobj)
   BufferedDMXRecv *recv = BUFFERED_DMX_RECV(gobj);
   if (recv->idle_source) {
     g_source_destroy(recv->idle_source);
+    g_source_unref(recv->idle_source);
     recv->idle_source = NULL;
   }
   if (recv->creator_main_context) {
@@ -100,11 +101,11 @@ static gboolean
 send_packet_signal(gpointer fdata)
 {
   BufferedDMXRecv *recv = fdata;
-  
   /* If the buffer is locked then try again later */
   if (!g_mutex_trylock(&recv->buffer_mutex)) {
     return TRUE;
   }
+  g_source_unref(recv->idle_source);
   recv->idle_source = NULL;
   if (!channels_changed(recv)) {
     /* Nothing changed */
