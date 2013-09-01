@@ -103,7 +103,6 @@ send_packet_signal(gpointer fdata)
   
   /* If the buffer is locked then try again later */
   if (!g_mutex_trylock(&recv->buffer_mutex)) {
-    g_debug("Delayed signaling");
     return TRUE;
   }
   recv->idle_source = NULL;
@@ -114,7 +113,6 @@ send_packet_signal(gpointer fdata)
   }
   swap_buffers(recv);
   g_mutex_unlock(&recv->buffer_mutex);
-   g_debug("Signal sent");
   g_signal_emit_by_name(recv, "new-packet",
 			recv->user_length, recv->user_buffer);
   memset(recv->change_bits, 0, MAX_BUFFER/sizeof(guint8));
