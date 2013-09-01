@@ -136,6 +136,23 @@ function FieldUpdate(url_arg, top_arg)
 	tout = setTimeout(requestUpdate, 1000);
     }
     
+    function start_editing(element)
+    {
+	if (!element.editing) {
+	    element.editing = true;
+	    element.normal_color = $(element).css('color');
+	    $(element).css('color', "#c00000");
+	}
+    }
+
+    function stop_editing(element)
+    {
+	if (element.editing) {
+	    element.editing = false;
+	    $(element).css('color', element.normal_color);
+	}
+    }
+
     function prepare_input_element(element)
     {
 	
@@ -152,10 +169,10 @@ function FieldUpdate(url_arg, top_arg)
 	$(element).keypress(
 	    function(event) {
 		if (event.keyCode == 27) { // ESC
-		    this.editing = false;
+		    stop_editing(this);
 		} else if (event.keyCode == 13) { // Return
 		    if (this.editing) {
-			this.editing = false; 
+			stop_editing(this);
 			var v = null;
 			var path = this.getAttribute("path");
 			var type = typeof(eval(this.getValue));
@@ -170,14 +187,15 @@ function FieldUpdate(url_arg, top_arg)
 			}
 		    }
 		} else {
-		    this.editing = true;
+		    start_editing(this);
 		}
 	    });
 	$(element).focus(function() {
-	    this.editing = true;
+	    stop_editing(this);
+
 	});
 	$(element).blur(function() {
-	    this.editing = false;
+	    stop_editing(this);
 	});
     }
     function handleValueReply(data,status,req)

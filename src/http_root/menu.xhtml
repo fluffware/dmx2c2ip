@@ -1,0 +1,42 @@
+<?xml version="1.0" ?>
+<!DOCTYPE html  PUBLIC '-//W3C//DTD XHTML 1.0 Strict//EN' 
+ 'http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd'>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:svg="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <head>
+    <title>DMX -> C2IP</title>
+    <script  type="application/javascript" src="C2IP.js">
+    </script>
+    <script  type="application/javascript" src="menu.js">
+    </script>
+    <script type="application/javascript" src="jquery_min.js">
+    </script>
+    <script type="application/javascript">
+      function setup_menus()
+      {
+      info_menu = new DeviceMenu("/values/functions/values", $("#info_menu"));
+      map_menu = new DeviceMenu("/values/dmxmap", $("#map_menu"));
+      }
+    </script>
+  </head>
+  <body onload="setup_menus();">
+    <ul>
+      <li>Device info
+      <ul  id="info_menu">
+	<li class="device-template">
+	  <a  href="device_info.xhtml" target="main_frame">
+	  <div class="replace-name"/></a>
+	</li>
+      </ul>
+      </li>
+      <li>DMX map
+      <ul  id="map_menu">
+	<li class="device-template">
+	  <a  href="dmx_map.xhtml" target="main_frame">
+	  <div class="replace-name"/></a>
+	</li>
+      </ul>
+      </li>
+      <li><a href="value_tree.xhtml" target="main_frame">Value tree</a></li>
+    </ul>
+  </body>
+</html>

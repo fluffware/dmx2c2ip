@@ -10,6 +10,8 @@ Port=8081
 #Password=password
 # PAth to files served by HTTP. No trailing '/'
 Root=@localstatedir@/lib/dmx2c2ip/www
+# File served if trying to access root URL of server
+RootFile=index.xhtml
 
 [C2IP]
 # Comma separated list of addresses
