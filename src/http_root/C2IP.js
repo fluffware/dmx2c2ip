@@ -31,6 +31,21 @@ function get_query_params(url)
     return v;
 }
 
+function replace_content(map, top)
+{
+    top.find("[replace-content]")
+	.each(function ()
+	      {
+		  var v = map[$(this).attr("replace-content")];
+		  if (v != null) {
+		      if (typeof(v) == "object") {
+			  $(this).text(JSON.stringify(v));
+		      } else {
+			  $(this).text(v);
+		      }
+		  }
+	      });
+}
 
 function ExpandTable(table, url, value_prefix)
 {
@@ -64,18 +79,7 @@ function ExpandTable(table, url, value_prefix)
 	    row.show();
 	    var attrs = data[id];
 	    attrs["id"] = id; 
-	    row.find(".replace-content")
-		.each(function ()
-		      {
-			  var v = attrs[$(this).text()];
-			  if (v != null) {
-			      if (typeof(v) == "object") {
-				  $(this).text(JSON.stringify(v));
-					} else {
-					    $(this).text(v);
-					}
-			  }
-		      });
+	    replace_content(attrs, row);
 	    row.find(".set-path")
 		.each(function ()
 		      {
@@ -118,10 +122,7 @@ function FillTable(table, url, filter)
 	var rows = table.find("tr[row-id]");
 	rows.each(function(i,e) {
 	    var id = $(e).attr('row-id');
-	    var col = $(e).find(".replace-content").filter(filter);
-	    col.each(function(i,e) {
-		$(e).text(data[id][$(e).text()]);
-	    });
+	    replace_content(data[id], $(e));
 	});
     }
 
