@@ -1,6 +1,6 @@
 SUBDIRS=http_root
 
-AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@ -Wno-long-long
+AM_CFLAGS = @GLIB_CFLAGS@ @MICROHTTPD_CFLAGS@ @JSONGLIB_CFLAGS@ -Wno-long-long -I $(srcdir)/httpd
 AM_CXXFLAGS = @OLA_CXXFLAGS@ @GLIB_CFLAGS@ -Wno-long-long
 
 noinst_PROGRAMS = dmx_send c2ip_tool
@@ -11,7 +11,7 @@ dmx_recv.c dmx_recv.h \
 buffered_dmx_recv.c buffered_dmx_recv.h buffered_dmx_recv_private.h \
 serial_dmx_recv.c serial_dmx_recv.h \
 dmx_serial.c dmx_serial.h \
-httpd.c httpd.h \
+httpd/httpd.c httpd/httpd.h \
 c2ip_scan.c c2ip_scan.h c2ip_scan_marshal.c c2ip_scan_marshal.h \
 c2ip_connection_manager.c c2ip_connection_manager.h \
 c2ip_connection_manager_marshal.c c2ip_connection_manager_marshal.h \
