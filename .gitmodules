@@ -1,0 +1,3 @@
+[submodule "src/httpd"]
+	path = src/httpd
+	url = git@github.com:fluffware/gobject-httpd.git
