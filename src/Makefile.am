@@ -30,7 +30,7 @@ dmx2c2ip_SOURCES += ola_dmx_recv.c ola_dmx_recv.h ola_wrapper.cpp ola_wrapper.h
 endif
 
 
-dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ @OLA_LIBS@ -lm
+dmx2c2ip_LDADD= @GLIB_LIBS@ @MICROHTTPD_LIBS@ @JSONGLIB_LIBS@ @OLA_LIBS@ -lm -ldl
 
 dmx_send_sources = dmx_send.c
 
